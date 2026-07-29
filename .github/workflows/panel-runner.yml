@@ -270,6 +270,24 @@ jobs:
           echo "  🔑 PASSWORD  : (lihat secret ADMIN_PASS)"
           echo "════════════════════════════════════════════"
 
+          # ── Update APP_URL di .env agar session/CSRF cocok dengan tunnel URL ─
+          echo "🔧 Updating APP_URL to $TUNNEL_URL..."
+          sudo sed -i "s|APP_URL=.*|APP_URL=$TUNNEL_URL|" /var/www/pterodactyl/.env
+
+          # Session & cache pakai file supaya lebih stabil di GitHub runner
+          sudo sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=file|"   /var/www/pterodactyl/.env
+          sudo sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=file|"       /var/www/pterodactyl/.env
+
+          # Clear Laravel config & session cache supaya perubahan langsung aktif
+          cd /var/www/pterodactyl
+          sudo php artisan config:clear
+          sudo php artisan cache:clear
+          sudo php artisan view:clear
+
+          # Restart services agar perubahan .env terbaca
+          sudo systemctl restart php8.2-fpm nginx
+          echo "✅ APP_URL updated & services restarted"
+
           # Tulis ke file untuk artifact
           mkdir -p /tmp/panel-url
           {
