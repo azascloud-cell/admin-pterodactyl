@@ -1,0 +1,313 @@
+name: 🦕 Run Pterodactyl Panel (No VPS)
+
+on:
+  # ── Jadwal: restart otomatis setiap 5 jam ─────────────────────────────────
+  schedule:
+    - cron: '0 */5 * * *'
+
+  # ── Manual / Ping eksternal ────────────────────────────────────────────────
+  workflow_dispatch:
+    inputs:
+      fresh_install:
+        description: 'Reset database (fresh install)?'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+  repository_dispatch:
+    types: [start-panel, keepalive-ping, ping]
+
+jobs:
+  run-panel:
+    name: 🖥️ Run Panel on GitHub Runner
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350   # ~5 jam 50 menit (batas GitHub = 6 jam)
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────
+      - name: 📦 Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Restore state DB & .env dari cache ────────────────────────────
+      - name: 🗄️ Restore Panel State (DB + env)
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /tmp/panel-state/db.sql.gz
+            /tmp/panel-state/.env
+            /tmp/panel-state/app_key.txt
+          key: pterodactyl-panel-state-v1
+          restore-keys: pterodactyl-panel-state-
+
+      - name: 📋 Check state
+        run: |
+          FRESH="${{ github.event.inputs.fresh_install || 'false' }}"
+          if [ -f /tmp/panel-state/db.sql.gz ] && [ "$FRESH" != "true" ]; then
+            echo "STATE=restore" >> $GITHUB_ENV
+            echo "✅ Previous state found — restoring database"
+          else
+            echo "STATE=fresh" >> $GITHUB_ENV
+            echo "🆕 No previous state — fresh installation"
+          fi
+          mkdir -p /tmp/panel-state
+
+      # ── 3. Install sistem dependencies (cached) ───────────────────────────
+      - name: ⚡ Install System Packages
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            nginx mariadb-server redis-server supervisor \
+            php8.1 php8.1-{cli,gd,mysql,pdo,mbstring,tokenizer,bcmath,xml,fpm,curl,zip} \
+            curl wget unzip composer cron 2>&1 | tail -5
+          echo "✅ Packages installed"
+
+      # ── 4. Konfigurasi MariaDB ─────────────────────────────────────────────
+      - name: 🗃️ Configure MariaDB
+        run: |
+          sudo systemctl start mariadb
+          sudo mysql -u root <<SQL
+          CREATE DATABASE IF NOT EXISTS panel CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+          CREATE USER IF NOT EXISTS 'pterodactyl'@'127.0.0.1' IDENTIFIED BY '${{ secrets.DB_PASSWORD }}';
+          GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'127.0.0.1';
+          FLUSH PRIVILEGES;
+          SQL
+          echo "✅ Database configured"
+
+      # ── 5. Download & setup Pterodactyl Panel ────────────────────────────
+      - name: 🦕 Setup Pterodactyl Panel
+        run: |
+          sudo mkdir -p /var/www/pterodactyl
+          cd /var/www/pterodactyl
+
+          # Download panel
+          LATEST=$(curl -s https://api.github.com/repos/pterodactyl/panel/releases/latest \
+            | grep browser_download_url | grep panel.tar.gz | cut -d'"' -f4)
+          sudo curl -Lo panel.tar.gz "$LATEST"
+          sudo tar -xzf panel.tar.gz
+          sudo rm panel.tar.gz
+          sudo chmod -R 755 storage bootstrap/cache
+
+          # Composer
+          sudo COMPOSER_ALLOW_SUPERUSER=1 composer install \
+            --no-dev --optimize-autoloader --no-interaction -q
+          echo "✅ Panel files ready"
+
+      # ── 6. Konfigurasi .env (restore atau fresh) ─────────────────────────
+      - name: ⚙️ Configure Environment
+        run: |
+          cd /var/www/pterodactyl
+
+          if [ "$STATE" = "restore" ] && [ -f /tmp/panel-state/.env ]; then
+            echo "📂 Restoring .env from cache..."
+            sudo cp /tmp/panel-state/.env .env
+          else
+            echo "🆕 Creating fresh .env..."
+            sudo cp .env.example .env
+            sudo php artisan key:generate --force
+
+            # Simpan app key
+            APP_KEY=$(grep '^APP_KEY=' .env | cut -d'=' -f2-)
+            mkdir -p /tmp/panel-state
+            echo "$APP_KEY" > /tmp/panel-state/app_key.txt
+          fi
+
+          # Update .env values
+          sudo sed -i "s|APP_URL=.*|APP_URL=http://localhost|"          .env
+          sudo sed -i "s|APP_ENVIRONMENT=.*|APP_ENVIRONMENT=production|" .env
+          sudo sed -i "s|APP_DEBUG=.*|APP_DEBUG=false|"                  .env
+          sudo sed -i "s|DB_HOST=.*|DB_HOST=127.0.0.1|"                  .env
+          sudo sed -i "s|DB_DATABASE=.*|DB_DATABASE=panel|"              .env
+          sudo sed -i "s|DB_USERNAME=.*|DB_USERNAME=pterodactyl|"        .env
+          sudo sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${{ secrets.DB_PASSWORD }}|" .env
+          sudo sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=redis|"            .env
+          sudo sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=redis|"        .env
+          sudo sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=redis|"    .env
+          echo "✅ .env configured"
+
+      # ── 7. Database: restore atau migrate ────────────────────────────────
+      - name: 🗄️ Setup Database
+        run: |
+          cd /var/www/pterodactyl
+
+          if [ "$STATE" = "restore" ] && [ -f /tmp/panel-state/db.sql.gz ]; then
+            echo "📂 Restoring database from cache..."
+            zcat /tmp/panel-state/db.sql.gz | sudo mysql -u root panel
+            echo "✅ Database restored"
+          else
+            echo "🆕 Running fresh migrations..."
+            sudo php artisan migrate --seed --force -q
+
+            # Buat admin user
+            sudo php artisan p:user:make \
+              --email="${{ secrets.ADMIN_EMAIL || 'admin@pterodactyl.local' }}" \
+              --username="${{ secrets.ADMIN_USER || 'admin' }}" \
+              --name-first="Admin" \
+              --name-last="User" \
+              --password="${{ secrets.ADMIN_PASS }}" \
+              --admin=1 || true
+            echo "✅ Fresh install done — admin user created"
+          fi
+
+      # ── 8. File permissions & services ────────────────────────────────────
+      - name: 🔧 Start Services
+        run: |
+          cd /var/www/pterodactyl
+          sudo chown -R www-data:www-data /var/www/pterodactyl/
+          sudo chmod -R 755 storage bootstrap/cache
+
+          # Supervisor (queue worker)
+          sudo tee /etc/supervisor/conf.d/ptero.conf > /dev/null <<CONF
+          [program:ptero-worker]
+          process_name=%(program_name)s_%(process_num)02d
+          command=php /var/www/pterodactyl/artisan queue:work --sleep=3 --tries=3 --max-time=3600
+          autostart=true
+          autorestart=true
+          user=www-data
+          numprocs=2
+          redirect_stderr=true
+          stdout_logfile=/var/log/supervisor/ptero.log
+          CONF
+
+          sudo supervisorctl reread && sudo supervisorctl update
+          sudo supervisorctl start ptero-worker:* 2>/dev/null || true
+
+          # Cron
+          echo "* * * * * www-data php /var/www/pterodactyl/artisan schedule:run" \
+            | sudo tee /etc/cron.d/pterodactyl
+          sudo systemctl restart cron
+
+          # PHP-FPM & Redis
+          sudo systemctl restart php8.1-fpm redis-server
+          echo "✅ Services started"
+
+      # ── 9. Nginx tanpa SSL (tunnel handle SSL) ────────────────────────────
+      - name: 🌐 Configure Nginx
+        run: |
+          sudo tee /etc/nginx/sites-available/pterodactyl > /dev/null <<NGINX
+          server {
+              listen 80 default_server;
+              server_name _;
+              root /var/www/pterodactyl/public;
+              index index.php;
+              client_max_body_size 100m;
+              add_header X-Frame-Options SAMEORIGIN;
+
+              location / {
+                  try_files \$uri \$uri/ /index.php?\$query_string;
+              }
+
+              location ~ \.php$ {
+                  fastcgi_split_path_info ^(.+\.php)(/.+)$;
+                  fastcgi_pass unix:/run/php/php8.1-fpm.sock;
+                  fastcgi_index index.php;
+                  include fastcgi_params;
+                  fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+                  fastcgi_param HTTP_PROXY "";
+              }
+
+              location ~ /\.ht { deny all; }
+          }
+          NGINX
+
+          sudo ln -sf /etc/nginx/sites-available/pterodactyl \
+                      /etc/nginx/sites-enabled/pterodactyl
+          sudo rm -f /etc/nginx/sites-enabled/default
+          sudo nginx -t && sudo systemctl restart nginx
+          echo "✅ Nginx running on port 80"
+
+      # ── 10. Cloudflare Tunnel (expose ke internet) ────────────────────────
+      - name: 🌍 Start Cloudflare Tunnel
+        run: |
+          # Download cloudflared
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o /usr/local/bin/cloudflared
+          chmod +x /usr/local/bin/cloudflared
+
+          # Start tunnel di background, simpan URL ke file
+          cloudflared tunnel --url http://localhost:80 \
+            --no-autoupdate \
+            2>/tmp/cloudflared.log &
+
+          echo "⏳ Waiting for tunnel URL..."
+          for i in $(seq 1 30); do
+            TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9\-]*\.trycloudflare\.com' \
+              /tmp/cloudflared.log 2>/dev/null | head -1)
+            if [ -n "$TUNNEL_URL" ]; then
+              echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+              echo ""
+              echo "════════════════════════════════════════"
+              echo "  🌐 PANEL URL: $TUNNEL_URL"
+              echo "════════════════════════════════════════"
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "⚠️ Tunnel URL not found yet, check logs"
+            cat /tmp/cloudflared.log | head -20
+          fi
+
+      # ── 11. Print akses info ke summary ──────────────────────────────────
+      - name: 📋 Access Information
+        run: |
+          echo "## 🦕 Pterodactyl Panel - Access Info" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Info | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🌐 Panel URL | \`$TUNNEL_URL\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 👤 Username  | \`${{ secrets.ADMIN_USER || 'admin' }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔑 Password  | *(lihat secret ADMIN_PASS)* |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🕐 Expires   | ~5 jam 50 menit dari sekarang |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> ⚠️ URL berubah setiap kali workflow restart. Cek tab **Summary** di Actions setiap run." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 **Panel URL: $TUNNEL_URL**"
+          echo "👤 Username: ${{ secrets.ADMIN_USER || 'admin' }}"
+          echo "🕐 Panel aktif ~5 jam 50 menit"
+
+      # ── 12. Keep alive: panel jalan selama sisa waktu ─────────────────────
+      - name: ♾️ Keep Panel Running (~5h 50m)
+        run: |
+          echo "Panel running at: $TUNNEL_URL"
+          echo "Sleeping to keep runner alive..."
+
+          # Heartbeat setiap 5 menit untuk log
+          END=$((SECONDS + 20700))   # 345 menit = 5h 45m
+          COUNT=0
+          while [ $SECONDS -lt $END ]; do
+            sleep 300
+            COUNT=$((COUNT + 1))
+            STATUS=$(curl -sk -o /dev/null -w "%{http_code}" \
+              http://localhost/auth/login --max-time 5 || echo "000")
+            echo "[$COUNT] ✅ Heartbeat — Panel HTTP: $STATUS — URL: $TUNNEL_URL"
+          done
+          echo "⏰ Time limit reached — saving state..."
+
+      # ── 13. Simpan state DB sebelum workflow berakhir ─────────────────────
+      - name: 💾 Save Panel State
+        if: always()
+        run: |
+          mkdir -p /tmp/panel-state
+
+          # Dump database
+          sudo mysqldump -u root panel 2>/dev/null | gzip > /tmp/panel-state/db.sql.gz \
+            && echo "✅ DB dump saved ($(du -sh /tmp/panel-state/db.sql.gz | cut -f1))" \
+            || echo "⚠️ DB dump failed"
+
+          # Simpan .env
+          sudo cp /var/www/pterodactyl/.env /tmp/panel-state/.env 2>/dev/null \
+            && echo "✅ .env saved" || echo "⚠️ .env not found"
+
+      - name: 📦 Cache Panel State
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /tmp/panel-state/db.sql.gz
+            /tmp/panel-state/.env
+            /tmp/panel-state/app_key.txt
+          key: pterodactyl-panel-state-v1-${{ github.run_number }}

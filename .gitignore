@@ -1,0 +1,26 @@
+# Environment files
+.env
+*.env
+!config/panel.env.example
+
+# SSH keys
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Keep-alive generated
+.keepalive/last-ping.txt
+
+# Logs
+*.log
