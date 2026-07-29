@@ -135,9 +135,18 @@ jobs:
           sudo sed -i "s|DB_USERNAME=.*|DB_USERNAME=pterodactyl|"        .env
           sudo sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${{ secrets.DB_PASSWORD }}|" .env
           # Gunakan file driver — lebih stabil di GitHub runner (tidak bergantung Redis)
-          sudo sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=file|"             .env
-          sudo sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=file|"         .env
-          sudo sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=sync|"     .env
+          sudo sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=file|"              .env
+          sudo sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=file|"          .env
+          sudo sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=sync|"      .env
+          # Trusted proxies: wajib saat di belakang Cloudflare tunnel (reverse proxy)
+          # Tanpa ini, CSRF & session cookie gagal karena X-Forwarded-Proto tidak dipercaya
+          grep -q '^TRUSTED_PROXIES=' .env \
+            && sudo sed -i "s|TRUSTED_PROXIES=.*|TRUSTED_PROXIES=*|" .env \
+            || echo "TRUSTED_PROXIES=*" | sudo tee -a .env
+          # Session cookie tidak perlu secure flag (nginx receive HTTP dari cloudflared)
+          grep -q '^SESSION_SECURE_COOKIE=' .env \
+            && sudo sed -i "s|SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=false|" .env \
+            || echo "SESSION_SECURE_COOKIE=false" | sudo tee -a .env
           echo "✅ .env configured"
 
       # ── 7. Database: restore atau migrate ────────────────────────────────
@@ -276,9 +285,9 @@ jobs:
           sudo sed -i "s|APP_URL=.*|APP_URL=$TUNNEL_URL|" /var/www/pterodactyl/.env
 
           # Rebuild config cache dengan APP_URL yang sudah benar
+          # (route:cache TIDAK dipakai — Pterodactyl tidak support route caching)
           cd /var/www/pterodactyl
           sudo php artisan config:cache
-          sudo php artisan route:cache
           sudo php artisan view:cache
 
           # Pastikan permissions storage OK untuk session file driver
