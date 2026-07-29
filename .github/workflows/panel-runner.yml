@@ -228,6 +228,11 @@ jobs:
                   include fastcgi_params;
                   fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
                   fastcgi_param HTTP_PROXY "";
+                  # Cloudflare Tunnel terminates SSL → nginx receives plain HTTP.
+                  # Tell PHP the original connection was HTTPS so Laravel's
+                  # TrustProxies middleware sets the correct scheme for CSRF & sessions.
+                  fastcgi_param HTTPS on;
+                  fastcgi_param HTTP_X_FORWARDED_PROTO https;
               }
 
               location ~ /\.ht { deny all; }
