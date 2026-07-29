@@ -127,16 +127,17 @@ jobs:
           fi
 
           # Update .env values
-          sudo sed -i "s|APP_URL=.*|APP_URL=http://localhost|"          .env
+          sudo sed -i "s|APP_URL=.*|APP_URL=http://localhost|"           .env
           sudo sed -i "s|APP_ENVIRONMENT=.*|APP_ENVIRONMENT=production|" .env
           sudo sed -i "s|APP_DEBUG=.*|APP_DEBUG=false|"                  .env
           sudo sed -i "s|DB_HOST=.*|DB_HOST=127.0.0.1|"                  .env
           sudo sed -i "s|DB_DATABASE=.*|DB_DATABASE=panel|"              .env
           sudo sed -i "s|DB_USERNAME=.*|DB_USERNAME=pterodactyl|"        .env
           sudo sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${{ secrets.DB_PASSWORD }}|" .env
-          sudo sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=redis|"            .env
-          sudo sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=redis|"        .env
-          sudo sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=redis|"    .env
+          # Gunakan file driver — lebih stabil di GitHub runner (tidak bergantung Redis)
+          sudo sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=file|"             .env
+          sudo sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=file|"         .env
+          sudo sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=sync|"     .env
           echo "✅ .env configured"
 
       # ── 7. Database: restore atau migrate ────────────────────────────────
@@ -270,23 +271,23 @@ jobs:
           echo "  🔑 PASSWORD  : (lihat secret ADMIN_PASS)"
           echo "════════════════════════════════════════════"
 
-          # ── Update APP_URL di .env agar session/CSRF cocok dengan tunnel URL ─
+          # ── Update APP_URL ke tunnel URL agar CSRF/session cocok ────────────
           echo "🔧 Updating APP_URL to $TUNNEL_URL..."
           sudo sed -i "s|APP_URL=.*|APP_URL=$TUNNEL_URL|" /var/www/pterodactyl/.env
 
-          # Session & cache pakai file supaya lebih stabil di GitHub runner
-          sudo sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=file|"   /var/www/pterodactyl/.env
-          sudo sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=file|"       /var/www/pterodactyl/.env
-
-          # Clear Laravel config & session cache supaya perubahan langsung aktif
+          # Rebuild config cache dengan APP_URL yang sudah benar
           cd /var/www/pterodactyl
-          sudo php artisan config:clear
-          sudo php artisan cache:clear
-          sudo php artisan view:clear
+          sudo php artisan config:cache
+          sudo php artisan route:cache
+          sudo php artisan view:cache
 
-          # Restart services agar perubahan .env terbaca
-          sudo systemctl restart php8.2-fpm nginx
-          echo "✅ APP_URL updated & services restarted"
+          # Pastikan permissions storage OK untuk session file driver
+          sudo chown -R www-data:www-data storage bootstrap/cache
+          sudo chmod -R 775 storage bootstrap/cache
+
+          # Restart PHP-FPM agar config baru terbaca
+          sudo systemctl restart php8.2-fpm
+          echo "✅ APP_URL=$TUNNEL_URL — config cached & services restarted"
 
           # Tulis ke file untuk artifact
           mkdir -p /tmp/panel-url
