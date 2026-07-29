@@ -233,86 +233,102 @@ jobs:
       # ── 10. Cloudflare Tunnel (expose ke internet) ────────────────────────
       - name: 🌍 Start Cloudflare Tunnel
         run: |
-          # Download cloudflared
           curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
             -o /usr/local/bin/cloudflared
           chmod +x /usr/local/bin/cloudflared
 
-          # Start tunnel di background, simpan URL ke file
-          cloudflared tunnel --url http://localhost:80 \
-            --no-autoupdate \
+          # Start tunnel background
+          cloudflared tunnel --url http://localhost:80 --no-autoupdate \
             2>/tmp/cloudflared.log &
 
-          echo "⏳ Waiting for tunnel URL..."
+          echo "⏳ Waiting for tunnel URL (up to 60s)..."
           for i in $(seq 1 30); do
-            TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9\-]*\.trycloudflare\.com' \
+            TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9\-]+\.trycloudflare\.com' \
               /tmp/cloudflared.log 2>/dev/null | head -1)
-            if [ -n "$TUNNEL_URL" ]; then
-              echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
-              echo ""
-              echo "════════════════════════════════════════"
-              echo "  🌐 PANEL URL: $TUNNEL_URL"
-              echo "════════════════════════════════════════"
-              break
-            fi
+            [ -n "$TUNNEL_URL" ] && break
             sleep 2
           done
 
           if [ -z "$TUNNEL_URL" ]; then
-            echo "⚠️ Tunnel URL not found yet, check logs"
-            cat /tmp/cloudflared.log | head -20
+            echo "⚠️ Retrying with longer wait..."
+            sleep 15
+            TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9\-]+\.trycloudflare\.com' \
+              /tmp/cloudflared.log 2>/dev/null | head -1)
           fi
 
-      # ── 11. Print akses info ke summary ──────────────────────────────────
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "❌ Could not get tunnel URL. Cloudflared log:"
+            cat /tmp/cloudflared.log
+            exit 1
+          fi
+
+          echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+          echo ""
+          echo "════════════════════════════════════════════"
+          echo "  🌐 PANEL URL : $TUNNEL_URL"
+          echo "  👤 USERNAME  : ${{ secrets.ADMIN_USER || 'admin' }}"
+          echo "  🔑 PASSWORD  : (lihat secret ADMIN_PASS)"
+          echo "════════════════════════════════════════════"
+
+          # Tulis ke file untuk artifact
+          mkdir -p /tmp/panel-url
+          cat > /tmp/panel-url/access.txt << EOF
+PANEL_URL=$TUNNEL_URL
+USERNAME=${{ secrets.ADMIN_USER || 'admin' }}
+RUN_ID=${{ github.run_id }}
+RUN_NUMBER=${{ github.run_number }}
+STARTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+EXPIRES_AT=$(date -u -d '+5 hours 45 minutes' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u '+%Y-%m-%dT%H:%M:%SZ')
+EOF
+          cat /tmp/panel-url/access.txt
+
+      # ── 11. Upload URL sebagai artifact (bisa dibaca saat job masih running) ─
+      - name: 📤 Upload Panel URL Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-access-info
+          path: /tmp/panel-url/access.txt
+          retention-days: 1
+          overwrite: true
+
+      # ── 12. Print akses info ke summary ──────────────────────────────────
       - name: 📋 Access Information
         run: |
-          echo "## 🦕 Pterodactyl Panel - Access Info" >> $GITHUB_STEP_SUMMARY
+          echo "## 🦕 Pterodactyl Panel — LIVE ✅" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Info | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 🌐 Panel URL | \`$TUNNEL_URL\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| 👤 Username  | \`${{ secrets.ADMIN_USER || 'admin' }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔑 Password  | *(lihat secret ADMIN_PASS)* |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🕐 Expires   | ~5 jam 50 menit dari sekarang |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🌐 **Panel URL** | [$TUNNEL_URL]($TUNNEL_URL) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 👤 Username | \`${{ secrets.ADMIN_USER || 'admin' }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔑 Password | *(secret ADMIN_PASS)* |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⏰ Aktif hingga | ~5 jam 45 menit dari sekarang |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> ⚠️ URL berubah setiap kali workflow restart. Cek tab **Summary** di Actions setiap run." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 **Panel URL: $TUNNEL_URL**"
-          echo "👤 Username: ${{ secrets.ADMIN_USER || 'admin' }}"
-          echo "🕐 Panel aktif ~5 jam 50 menit"
+          echo "> URL berubah setiap restart — selalu cek Summary untuk URL terbaru." >> $GITHUB_STEP_SUMMARY
 
-      # ── 12. Keep alive: panel jalan selama sisa waktu ─────────────────────
-      - name: ♾️ Keep Panel Running (~5h 50m)
+      # ── 13. Keep alive: panel jalan selama sisa waktu ─────────────────────
+      - name: ♾️ Keep Panel Running (~5h 45m)
         run: |
-          echo "Panel running at: $TUNNEL_URL"
-          echo "Sleeping to keep runner alive..."
-
-          # Heartbeat setiap 5 menit untuk log
-          END=$((SECONDS + 20700))   # 345 menit = 5h 45m
+          echo "✅ Panel live: $TUNNEL_URL"
+          END=$((SECONDS + 20700))
           COUNT=0
           while [ $SECONDS -lt $END ]; do
             sleep 300
             COUNT=$((COUNT + 1))
             STATUS=$(curl -sk -o /dev/null -w "%{http_code}" \
               http://localhost/auth/login --max-time 5 || echo "000")
-            echo "[$COUNT] ✅ Heartbeat — Panel HTTP: $STATUS — URL: $TUNNEL_URL"
+            echo "[$COUNT] Heartbeat — HTTP $STATUS — $TUNNEL_URL"
           done
-          echo "⏰ Time limit reached — saving state..."
+          echo "⏰ Session ending — saving state..."
 
-      # ── 13. Simpan state DB sebelum workflow berakhir ─────────────────────
+      # ── 14. Simpan state DB sebelum workflow berakhir ─────────────────────
       - name: 💾 Save Panel State
         if: always()
         run: |
           mkdir -p /tmp/panel-state
-
-          # Dump database
           sudo mysqldump -u root panel 2>/dev/null | gzip > /tmp/panel-state/db.sql.gz \
-            && echo "✅ DB dump saved ($(du -sh /tmp/panel-state/db.sql.gz | cut -f1))" \
+            && echo "✅ DB saved ($(du -sh /tmp/panel-state/db.sql.gz | cut -f1))" \
             || echo "⚠️ DB dump failed"
-
-          # Simpan .env
-          sudo cp /var/www/pterodactyl/.env /tmp/panel-state/.env 2>/dev/null \
-            && echo "✅ .env saved" || echo "⚠️ .env not found"
+          sudo cp /var/www/pterodactyl/.env /tmp/panel-state/.env 2>/dev/null || true
 
       - name: 📦 Cache Panel State
         if: always()
