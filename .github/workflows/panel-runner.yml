@@ -272,14 +272,14 @@ jobs:
 
           # Tulis ke file untuk artifact
           mkdir -p /tmp/panel-url
-          cat > /tmp/panel-url/access.txt << EOF
-PANEL_URL=$TUNNEL_URL
-USERNAME=${{ secrets.ADMIN_USER || 'admin' }}
-RUN_ID=${{ github.run_id }}
-RUN_NUMBER=${{ github.run_number }}
-STARTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-EXPIRES_AT=$(date -u -d '+5 hours 45 minutes' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u '+%Y-%m-%dT%H:%M:%SZ')
-EOF
+          {
+            echo "PANEL_URL=$TUNNEL_URL"
+            echo "USERNAME=${{ secrets.ADMIN_USER || 'admin' }}"
+            echo "RUN_ID=${{ github.run_id }}"
+            echo "RUN_NUMBER=${{ github.run_number }}"
+            echo "STARTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "EXPIRES_AT=$(date -u -d '+5 hours 45 minutes' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          } > /tmp/panel-url/access.txt
           cat /tmp/panel-url/access.txt
 
       # ── 11. Upload URL sebagai artifact (bisa dibaca saat job masih running) ─
