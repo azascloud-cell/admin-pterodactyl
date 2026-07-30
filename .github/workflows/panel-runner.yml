@@ -362,12 +362,12 @@ jobs:
           echo "✅ index.js placeholder dibuat di $VOL_DIR"
 
           # Force-set server ke status installed via DB
-          # Pterodactyl v1.x: status=NULL artinya installed, installed=1
+          # Pterodactyl v1.x: installed = status IS NULL + installed_at tidak NULL
+          # Kolom 'installed' tidak ada di schema — pakai status=NULL + installed_at=NOW()
           sudo mysql -u root panel -e \
-            "UPDATE servers SET status=NULL, installed=1, skip_scripts=1 WHERE uuid='${SRV_UUID}';" \
-            2>/dev/null || \
-          sudo mysql -u root panel -e \
-            "UPDATE servers SET installed=1, skip_scripts=1 WHERE uuid='${SRV_UUID}';"
+            "UPDATE servers SET status=NULL, skip_scripts=1, installed_at=NOW() WHERE uuid='${SRV_UUID}';" \
+          || sudo mysql -u root panel -e \
+            "UPDATE servers SET status=NULL, skip_scripts=1 WHERE uuid='${SRV_UUID}';"
 
           echo "✅ Server marked as installed (status=NULL)"
 
