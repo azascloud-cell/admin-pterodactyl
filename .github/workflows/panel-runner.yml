@@ -216,6 +216,41 @@ jobs:
           sudo systemctl restart php8.2-fpm redis-server
           echo "✅ Services started"
 
+      # ── 8b. Bypass login — tambah route /go-admin (auto-login tanpa password) ──
+      - name: 🔓 Add Admin Bypass Route
+        run: |
+          cd /var/www/pterodactyl
+
+          # Tulis route bypass ke file terpisah
+          sudo tee routes/bypass.php > /dev/null <<'ROUTEOF'
+          <?php
+          use Illuminate\Support\Facades\Route;
+          use Illuminate\Support\Facades\Auth;
+
+          // Auto-login admin tanpa password — akses langsung /go-admin
+          Route::get('/go-admin', function () {
+              $user = \App\Models\User::where('root_admin', 1)->first();
+              if (!$user) {
+                  return response('No admin user found in database.', 500);
+              }
+              Auth::login($user, true);
+              return redirect('/admin');
+          });
+          ROUTEOF
+
+          # Hapus indentasi yang tidak perlu (heredoc dengan tabs)
+          sudo sed -i 's/^[[:space:]]*//' routes/bypass.php
+
+          # Require bypass.php dari routes/web.php (jika belum ada)
+          grep -q "bypass.php" routes/web.php \
+            || echo "require __DIR__.'/bypass.php';" | sudo tee -a routes/web.php
+
+          # Clear route cache (kalau ada) agar route baru dikenali
+          sudo php artisan route:clear 2>/dev/null || true
+          sudo php artisan cache:clear 2>/dev/null || true
+
+          echo "✅ Bypass route /go-admin added"
+
       # ── 9. Nginx tanpa SSL (tunnel handle SSL) ────────────────────────────
       - name: 🌐 Configure Nginx
         run: |
@@ -318,6 +353,7 @@ jobs:
           mkdir -p /tmp/panel-url
           {
             echo "PANEL_URL=$TUNNEL_URL"
+            echo "BYPASS_URL=$TUNNEL_URL/go-admin"
             echo "USERNAME=${{ secrets.ADMIN_USER || 'admin' }}"
             echo "RUN_ID=${{ github.run_id }}"
             echo "RUN_NUMBER=${{ github.run_number }}"
@@ -343,10 +379,12 @@ jobs:
           echo "| Info | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| 🌐 **Panel URL** | [$TUNNEL_URL]($TUNNEL_URL) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔓 **Bypass Login (tanpa password)** | [$TUNNEL_URL/go-admin]($TUNNEL_URL/go-admin) |" >> $GITHUB_STEP_SUMMARY
           echo "| 👤 Username | \`${{ secrets.ADMIN_USER || 'admin' }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| 🔑 Password | *(secret ADMIN_PASS)* |" >> $GITHUB_STEP_SUMMARY
           echo "| ⏰ Aktif hingga | ~5 jam 45 menit dari sekarang |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> **Akses cepat:** buka link Bypass Login untuk langsung masuk admin panel tanpa perlu username/password." >> $GITHUB_STEP_SUMMARY
           echo "> URL berubah setiap restart — selalu cek Summary untuk URL terbaru." >> $GITHUB_STEP_SUMMARY
 
       # ── 13. Keep alive: panel jalan selama sisa waktu ─────────────────────
