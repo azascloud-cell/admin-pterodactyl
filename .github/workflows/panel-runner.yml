@@ -184,20 +184,9 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/sync_admin.py" "${ADMIN_USER:-admin}" "${ADMIN_PASS:-admin}"
 
           # ── Force-reset password via Laravel Hash::make (lebih reliable) ────
-          # sync_admin.py pakai PHP password_hash() langsung; di sini kita juga
-          # pakai artisan tinker agar hash benar-benar cocok dengan yang Pterodactyl pakai.
+          # Gunakan script terpisah agar tidak ada masalah YAML escaping
           FINAL_PASS="${ADMIN_PASS:-admin}"
-          cd /var/www/pterodactyl
-          sudo php artisan tinker --execute="\
-\$pass = '$FINAL_PASS'; \
-\App\Models\User::where('root_admin', 1)->update([\
-  'password' => \Illuminate\Support\Facades\Hash::make(\$pass), \
-  'use_totp' => 0\
-]); \
-\$u = \App\Models\User::where('root_admin', 1)->first(); \
-echo 'CREDENTIALS => username:'.\$u->username.' email:'.\$u->email.' password:'.\$pass;" \
-          2>&1 | tail -5 || echo "⚠️ artisan tinker failed, using sync_admin result"
-          cd -
+          python3 "$GITHUB_WORKSPACE/scripts/reset_password.py" "$FINAL_PASS"
 
       # ── 8. File permissions & services ────────────────────────────────────
       - name: 🔧 Start Services
