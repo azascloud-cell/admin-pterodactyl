@@ -174,29 +174,47 @@ jobs:
             echo "✅ Fresh migrations done"
           fi
 
-          # ── Sync admin user (selalu dijalankan, restore maupun fresh) ──────
-          # Default login: username=admin password=admin (bisa dioverride via secrets)
-          ADMIN_EMAIL_VAL="${{ secrets.ADMIN_EMAIL || 'admin@pterodactyl.local' }}"
-          ADMIN_USER_VAL="admin"
-          ADMIN_PASS_VAL="admin"
+          # ── Sync admin user via Laravel bootstrap (bypass artisan validation) ─
+          # p:user:make menolak password < 8 karakter secara diam-diam.
+          # Script ini bootstrap Laravel langsung, pakai Hash::make() yang
+          # identik dengan apa yang Pterodactyl gunakan saat verify login.
+          sudo tee /tmp/sync_admin.php > /dev/null << 'PHPEOF'
+          <?php
+          require '/var/www/pterodactyl/vendor/autoload.php';
+          $app = require_once '/var/www/pterodactyl/bootstrap/app.php';
+          $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 
-          # Buat user jika belum ada (abaikan error kalau sudah ada)
-          sudo php artisan p:user:make \
-            --email="$ADMIN_EMAIL_VAL" \
-            --username="$ADMIN_USER_VAL" \
-            --name-first="Admin" \
-            --name-last="User" \
-            --password="$ADMIN_PASS_VAL" \
-            --admin=1 2>/dev/null || true
+          use Pterodactyl\Models\User;
+          use Illuminate\Support\Facades\Hash;
+          use Ramsey\Uuid\Uuid;
 
-          # Force-update password & pastikan admin flag = 1
-          # Jalankan untuk semua kemungkinan username (Admin/admin/ADMIN) karena
-          # MySQL utf8mb4_unicode_ci adalah case-insensitive
-          HASH=$(php8.2 -r "echo password_hash('$ADMIN_PASS_VAL', PASSWORD_BCRYPT);")
-          sudo mysql -u root panel \
-            -e "UPDATE users SET password='$HASH', root_admin=1, username='$ADMIN_USER_VAL' WHERE username='$ADMIN_USER_VAL' OR email='$ADMIN_EMAIL_VAL';"
-          COUNT=$(sudo mysql -u root panel -se "SELECT COUNT(*) FROM users WHERE username='$ADMIN_USER_VAL';")
-          echo "✅ Admin user synced — login: $ADMIN_USER_VAL / $ADMIN_PASS_VAL (rows: $COUNT)"
+          $user = User::where('username', 'admin')
+              ->orWhere('username', 'Admin')
+              ->first();
+
+          if ($user) {
+              $user->username  = 'admin';
+              $user->password  = Hash::make('admin');
+              $user->root_admin = true;
+              $user->save();
+              echo "✅ Updated user id={$user->id} username={$user->username}\n";
+          } else {
+              $user = User::create([
+                  'uuid'       => Uuid::uuid4()->toString(),
+                  'username'   => 'admin',
+                  'email'      => 'admin@pterodactyl.local',
+                  'name_first' => 'Admin',
+                  'name_last'  => 'User',
+                  'password'   => Hash::make('admin'),
+                  'root_admin' => true,
+                  'language'   => 'en',
+                  'use_totp'   => false,
+              ]);
+              echo "✅ Created user id={$user->id} username={$user->username}\n";
+          }
+          PHPEOF
+
+          sudo php8.2 /tmp/sync_admin.php
 
       # ── 8. File permissions & services ────────────────────────────────────
       - name: 🔧 Start Services
