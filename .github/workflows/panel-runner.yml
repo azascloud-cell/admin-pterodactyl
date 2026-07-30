@@ -304,19 +304,17 @@ jobs:
         run: |
           sudo mkdir -p /var/lib/pterodactyl/volumes
           sudo mkdir -p /var/log/pterodactyl
+          # Pre-create log file agar shell dapat redirect tanpa sudo
+          sudo touch /var/log/pterodactyl/wings.log
+          sudo chmod 666 /var/log/pterodactyl/wings.log
 
-          # Start Wings sebagai background daemon
-          sudo nohup wings --config /etc/pterodactyl/config.yml \
-            > /var/log/pterodactyl/wings.log 2>&1 &
-          echo $! | sudo tee /var/run/wings.pid
+          # Start Wings — redirect SETELAH file dibuat, sehingga tidak perlu sudo untuk redirect
+          nohup sudo wings --config /etc/pterodactyl/config.yml \
+            >> /var/log/pterodactyl/wings.log 2>&1 &
+          echo $! > /tmp/wings.pid
 
           echo "⏳ Waiting for Wings to start..."
           for i in $(seq 1 30); do
-            if curl -sk http://127.0.0.1:8080 >/dev/null 2>&1; then
-              echo "✅ Wings is up (attempt $i)"
-              break
-            fi
-            # Wings mungkin return non-200 tapi sudah listen — coba dengan curl -o
             CODE=$(curl -sk -o /dev/null -w "%{http_code}" http://127.0.0.1:8080 2>/dev/null || echo "000")
             if [ "$CODE" != "000" ]; then
               echo "✅ Wings responding (HTTP $CODE) — attempt $i"
@@ -326,8 +324,8 @@ jobs:
             sleep 2
           done
 
-          echo "--- Wings log ---"
-          cat /var/log/pterodactyl/wings.log 2>/dev/null | tail -20 || true
+          echo "--- Wings log (last 20 lines) ---"
+          tail -20 /var/log/pterodactyl/wings.log || true
 
       # ── 16. Auto-create Node.js Server ───────────────────────────────────
       - name: 🟢 Auto-Create Node.js Server
