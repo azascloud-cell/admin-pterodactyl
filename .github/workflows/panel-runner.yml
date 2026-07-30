@@ -219,37 +219,15 @@ jobs:
       # ── 8b. Bypass login — tambah route /go-admin (auto-login tanpa password) ──
       - name: 🔓 Add Admin Bypass Route
         run: |
+          # Gunakan Python script (lebih aman dari heredoc di YAML)
+          sudo python3 "$GITHUB_WORKSPACE/scripts/add_bypass.py"
+
+          # Clear cache agar route baru dikenali
           cd /var/www/pterodactyl
-
-          # Tulis route bypass ke file terpisah
-          sudo tee routes/bypass.php > /dev/null <<'ROUTEOF'
-          <?php
-          use Illuminate\Support\Facades\Route;
-          use Illuminate\Support\Facades\Auth;
-
-          // Auto-login admin tanpa password — akses langsung /go-admin
-          Route::get('/go-admin', function () {
-              $user = \App\Models\User::where('root_admin', 1)->first();
-              if (!$user) {
-                  return response('No admin user found in database.', 500);
-              }
-              Auth::login($user, true);
-              return redirect('/admin');
-          });
-          ROUTEOF
-
-          # Hapus indentasi yang tidak perlu (heredoc dengan tabs)
-          sudo sed -i 's/^[[:space:]]*//' routes/bypass.php
-
-          # Require bypass.php dari routes/web.php (jika belum ada)
-          grep -q "bypass.php" routes/web.php \
-            || echo "require __DIR__.'/bypass.php';" | sudo tee -a routes/web.php
-
-          # Clear route cache (kalau ada) agar route baru dikenali
           sudo php artisan route:clear 2>/dev/null || true
           sudo php artisan cache:clear 2>/dev/null || true
 
-          echo "✅ Bypass route /go-admin added"
+          echo "✅ Bypass route /go-admin ready"
 
       # ── 9. Nginx tanpa SSL (tunnel handle SSL) ────────────────────────────
       - name: 🌐 Configure Nginx
