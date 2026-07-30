@@ -163,6 +163,11 @@ jobs:
             echo "📂 Restoring database from cache..."
             zcat /tmp/panel-state/db.sql.gz | sudo mysql -u root panel
             echo "✅ Database restored"
+            # Selalu jalankan migrate setelah restore — panel selalu download versi latest,
+            # skema DB dari cache mungkin sudah ketinggalan migration terbaru
+            echo "🔄 Running pending migrations on restored DB..."
+            sudo php artisan migrate --force -q
+            echo "✅ Migrations applied"
           else
             echo "🆕 Running fresh migrations..."
             sudo php artisan migrate --seed --force -q
