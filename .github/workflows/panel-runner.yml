@@ -1,11 +1,9 @@
-name: 🦕 Run Pterodactyl Panel (No VPS)
+name: 🦕 Pterodactyl Panel — Personal
 
 on:
-  # ── Jadwal: restart otomatis setiap 5 jam ─────────────────────────────────
   schedule:
-    - cron: '0 */5 * * *'
+    - cron: '0 */5 * * *'   # Auto-restart setiap 5 jam
 
-  # ── Manual / Ping eksternal ────────────────────────────────────────────────
   workflow_dispatch:
     inputs:
       fresh_install:
@@ -20,17 +18,17 @@ on:
 
 jobs:
   run-panel:
-    name: 🖥️ Run Panel on GitHub Runner
+    name: 🖥️ Run Panel
     runs-on: ubuntu-22.04
-    timeout-minutes: 350   # ~5 jam 50 menit (batas GitHub = 6 jam)
+    timeout-minutes: 350   # ~5 jam 50 menit
 
     steps:
-      # ── 1. Checkout ──────────────────────────────────────────────────────
+      # ── 1. Checkout ───────────────────────────────────────────────────────
       - name: 📦 Checkout
         uses: actions/checkout@v4
 
-      # ── 2. Restore state DB & .env dari cache ────────────────────────────
-      - name: 🗄️ Restore Panel State (DB + env)
+      # ── 2. Restore state ──────────────────────────────────────────────────
+      - name: 🗄️ Restore Panel State
         id: cache-restore
         uses: actions/cache/restore@v4
         with:
@@ -46,37 +44,31 @@ jobs:
           FRESH="${{ github.event.inputs.fresh_install || 'false' }}"
           if [ -f /tmp/panel-state/db.sql.gz ] && [ "$FRESH" != "true" ]; then
             echo "STATE=restore" >> $GITHUB_ENV
-            echo "✅ Previous state found — restoring database"
+            echo "✅ Previous state found — restoring"
           else
             echo "STATE=fresh" >> $GITHUB_ENV
-            echo "🆕 No previous state — fresh installation"
+            echo "🆕 Fresh installation"
           fi
           mkdir -p /tmp/panel-state
 
-      # ── 3. Install sistem dependencies (cached) ───────────────────────────
-      - name: ⚡ Install System Packages
+      # ── 3. Install system packages ────────────────────────────────────────
+      - name: ⚡ Install Packages
         run: |
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update -qq
-
-          # Tambah Ondrej PHP PPA untuk PHP 8.2
           sudo apt-get install -y -qq software-properties-common
           sudo add-apt-repository -y ppa:ondrej/php
           sudo apt-get update -qq
-
           sudo apt-get install -y -qq \
             nginx mariadb-server redis-server supervisor \
             php8.2 php8.2-cli php8.2-gd php8.2-mysql php8.2-pdo \
             php8.2-mbstring php8.2-tokenizer php8.2-bcmath \
             php8.2-xml php8.2-fpm php8.2-curl php8.2-zip \
-            curl wget unzip cron 2>&1 | tail -10
-
-          # Install Composer
+            curl wget unzip cron 2>&1 | tail -5
           curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/local/bin --filename=composer
-          composer --version
-          echo "✅ Packages installed (PHP $(php8.2 --version | head -1))"
+          echo "✅ PHP $(php8.2 --version | head -1 | cut -d' ' -f2)"
 
-      # ── 4. Konfigurasi MariaDB ─────────────────────────────────────────────
+      # ── 4. MariaDB ────────────────────────────────────────────────────────
       - name: 🗃️ Configure MariaDB
         run: |
           sudo systemctl start mariadb
@@ -86,32 +78,26 @@ jobs:
           GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'127.0.0.1';
           FLUSH PRIVILEGES;
           SQL
-          echo "✅ Database configured"
+          echo "✅ Database ready"
 
-      # ── 5. Download & setup Pterodactyl Panel ────────────────────────────
+      # ── 5. Download panel ─────────────────────────────────────────────────
       - name: 🦕 Setup Pterodactyl Panel
         run: |
           sudo mkdir -p /var/www/pterodactyl
           cd /var/www/pterodactyl
-
-          # Download panel
           LATEST=$(curl -s https://api.github.com/repos/pterodactyl/panel/releases/latest \
             | grep browser_download_url | grep panel.tar.gz | cut -d'"' -f4)
           sudo curl -Lo panel.tar.gz "$LATEST"
-          sudo tar -xzf panel.tar.gz
-          sudo rm panel.tar.gz
+          sudo tar -xzf panel.tar.gz && sudo rm panel.tar.gz
           sudo chmod -R 755 storage bootstrap/cache
-
-          # Composer
           sudo COMPOSER_ALLOW_SUPERUSER=1 composer install \
             --no-dev --optimize-autoloader --no-interaction -q
           echo "✅ Panel files ready"
 
-      # ── 6. Konfigurasi .env (restore atau fresh) ─────────────────────────
+      # ── 6. Environment ────────────────────────────────────────────────────
       - name: ⚙️ Configure Environment
         run: |
           cd /var/www/pterodactyl
-
           if [ "$STATE" = "restore" ] && [ -f /tmp/panel-state/.env ]; then
             echo "📂 Restoring .env from cache..."
             sudo cp /tmp/panel-state/.env .env
@@ -119,14 +105,10 @@ jobs:
             echo "🆕 Creating fresh .env..."
             sudo cp .env.example .env
             sudo php artisan key:generate --force
-
-            # Simpan app key
             APP_KEY=$(grep '^APP_KEY=' .env | cut -d'=' -f2-)
             mkdir -p /tmp/panel-state
             echo "$APP_KEY" > /tmp/panel-state/app_key.txt
           fi
-
-          # Update .env values
           sudo sed -i "s|APP_URL=.*|APP_URL=http://localhost|"           .env
           sudo sed -i "s|APP_ENVIRONMENT=.*|APP_ENVIRONMENT=production|" .env
           sudo sed -i "s|APP_DEBUG=.*|APP_DEBUG=false|"                  .env
@@ -134,68 +116,57 @@ jobs:
           sudo sed -i "s|DB_DATABASE=.*|DB_DATABASE=panel|"              .env
           sudo sed -i "s|DB_USERNAME=.*|DB_USERNAME=pterodactyl|"        .env
           sudo sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${{ secrets.DB_PASSWORD }}|" .env
-          # Gunakan file driver — lebih stabil di GitHub runner (tidak bergantung Redis)
-          sudo sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=file|"              .env
-          sudo sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=file|"          .env
-          sudo sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=sync|"      .env
-          # Trusted proxies: wajib saat di belakang Cloudflare tunnel (reverse proxy)
-          # Tanpa ini, CSRF & session cookie gagal karena X-Forwarded-Proto tidak dipercaya
-          grep -q '^TRUSTED_PROXIES=' .env \
-            && sudo sed -i "s|TRUSTED_PROXIES=.*|TRUSTED_PROXIES=*|" .env \
-            || echo "TRUSTED_PROXIES=*" | sudo tee -a .env
-          # Session cookie tidak perlu secure flag (nginx receive HTTP dari cloudflared)
+          sudo sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=file|"             .env
+          sudo sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=file|"         .env
+          sudo sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=sync|"     .env
+          grep -q '^TRUSTED_PROXIES='      .env \
+            && sudo sed -i "s|TRUSTED_PROXIES=.*|TRUSTED_PROXIES=*|"             .env \
+            || echo "TRUSTED_PROXIES=*"            | sudo tee -a .env
           grep -q '^SESSION_SECURE_COOKIE=' .env \
             && sudo sed -i "s|SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=false|" .env \
-            || echo "SESSION_SECURE_COOKIE=false" | sudo tee -a .env
-          # Disable reCAPTCHA — tidak ada kunci valid di environment ini,
-          # server-side validation akan gagal dan menyebabkan "unexpected error" saat login
-          grep -q '^RECAPTCHA_ENABLED=' .env \
-            && sudo sed -i "s|RECAPTCHA_ENABLED=.*|RECAPTCHA_ENABLED=false|" .env \
-            || echo "RECAPTCHA_ENABLED=false" | sudo tee -a .env
+            || echo "SESSION_SECURE_COOKIE=false"  | sudo tee -a .env
+          grep -q '^RECAPTCHA_ENABLED='    .env \
+            && sudo sed -i "s|RECAPTCHA_ENABLED=.*|RECAPTCHA_ENABLED=false|"    .env \
+            || echo "RECAPTCHA_ENABLED=false"      | sudo tee -a .env
           echo "✅ .env configured"
 
-      # ── 7. Database: restore atau migrate ────────────────────────────────
+      # ── 7. Database migrate + admin user ──────────────────────────────────
       - name: 🗄️ Setup Database
         run: |
           cd /var/www/pterodactyl
-
           if [ "$STATE" = "restore" ] && [ -f /tmp/panel-state/db.sql.gz ]; then
-            echo "📂 Restoring database from cache..."
+            echo "📂 Restoring database..."
             zcat /tmp/panel-state/db.sql.gz | sudo mysql -u root panel
-            echo "✅ Database restored"
-            # Selalu jalankan migrate setelah restore — panel selalu download versi latest,
-            # skema DB dari cache mungkin sudah ketinggalan migration terbaru
-            echo "🔄 Running pending migrations on restored DB..."
+            echo "🔄 Running pending migrations..."
             sudo php artisan migrate --force -q
-            echo "✅ Migrations applied"
           else
-            echo "🆕 Running fresh migrations..."
+            echo "🆕 Fresh migrations..."
             sudo php artisan migrate --seed --force -q
-            echo "✅ Fresh migrations done"
           fi
+          echo "✅ Database ready"
 
-          # ── Sync admin user — script terpisah, tidak pakai heredoc ──────────
-          # Heredoc di YAML menyebabkan YAML parse error karena end-marker
-          # PYEOF harus di kolom-0 (bash) tapi YAML butuh indentasi.
-          # Solusi: script di-commit ke repo dan dipanggil langsung.
+          # Sync admin user
           ADMIN_USER="${{ secrets.ADMIN_USER }}"
           ADMIN_PASS="${{ secrets.ADMIN_PASS }}"
-          # Fallback ke 'admin' jika secret tidak di-set
-          python3 "$GITHUB_WORKSPACE/scripts/sync_admin.py" "${ADMIN_USER:-admin}" "${ADMIN_PASS:-admin}"
+          python3 "$GITHUB_WORKSPACE/scripts/sync_admin.py" \
+            "${ADMIN_USER:-admin}" "${ADMIN_PASS:-admin}"
 
-          # ── Force-reset password via Laravel Hash::make (lebih reliable) ────
-          # Gunakan script terpisah agar tidak ada masalah YAML escaping
+          # Force-reset password
           FINAL_PASS="${ADMIN_PASS:-admin}"
           python3 "$GITHUB_WORKSPACE/scripts/reset_password.py" "$FINAL_PASS"
 
-      # ── 8. File permissions & services ────────────────────────────────────
+      # ── 8. Import Node.js Egg ─────────────────────────────────────────────
+      - name: 🟢 Import Node.js Egg
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/import_nodejs_egg.py"
+
+      # ── 9. Services ───────────────────────────────────────────────────────
       - name: 🔧 Start Services
         run: |
           cd /var/www/pterodactyl
           sudo chown -R www-data:www-data /var/www/pterodactyl/
           sudo chmod -R 755 storage bootstrap/cache
 
-          # Supervisor (queue worker)
           sudo tee /etc/supervisor/conf.d/ptero.conf > /dev/null <<CONF
           [program:ptero-worker]
           process_name=%(program_name)s_%(process_num)02d
@@ -211,29 +182,22 @@ jobs:
           sudo supervisorctl reread && sudo supervisorctl update
           sudo supervisorctl start ptero-worker:* 2>/dev/null || true
 
-          # Cron
           echo "* * * * * www-data php /var/www/pterodactyl/artisan schedule:run" \
             | sudo tee /etc/cron.d/pterodactyl
           sudo systemctl restart cron
-
-          # PHP-FPM & Redis
           sudo systemctl restart php8.2-fpm redis-server
           echo "✅ Services started"
 
-      # ── 8b. Bypass login — tambah route /go-admin (auto-login tanpa password) ──
+      # ── 10. Bypass login /go-admin ────────────────────────────────────────
       - name: 🔓 Add Admin Bypass Route
         run: |
-          # Gunakan Python script (lebih aman dari heredoc di YAML)
           sudo python3 "$GITHUB_WORKSPACE/scripts/add_bypass.py"
-
-          # Clear cache agar route baru dikenali
           cd /var/www/pterodactyl
-          sudo php artisan route:clear 2>/dev/null || true
-          sudo php artisan cache:clear 2>/dev/null || true
+          sudo php artisan route:clear  2>/dev/null || true
+          sudo php artisan cache:clear  2>/dev/null || true
+          echo "✅ Bypass /go-admin ready"
 
-          echo "✅ Bypass route /go-admin ready"
-
-      # ── 9. Nginx tanpa SSL (tunnel handle SSL) ────────────────────────────
+      # ── 11. Nginx ─────────────────────────────────────────────────────────
       - name: 🌐 Configure Nginx
         run: |
           sudo tee /etc/nginx/sites-available/pterodactyl > /dev/null <<NGINX
@@ -243,12 +207,10 @@ jobs:
               root /var/www/pterodactyl/public;
               index index.php;
               client_max_body_size 100m;
-              add_header X-Frame-Options SAMEORIGIN;
 
               location / {
                   try_files \$uri \$uri/ /index.php?\$query_string;
               }
-
               location ~ \.php$ {
                   fastcgi_split_path_info ^(.+\.php)(/.+)$;
                   fastcgi_pass unix:/run/php/php8.2-fpm.sock;
@@ -256,13 +218,9 @@ jobs:
                   include fastcgi_params;
                   fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
                   fastcgi_param HTTP_PROXY "";
-                  # Cloudflare Tunnel terminates SSL → nginx receives plain HTTP.
-                  # Tell PHP the original connection was HTTPS so Laravel's
-                  # TrustProxies middleware sets the correct scheme for CSRF & sessions.
                   fastcgi_param HTTPS on;
                   fastcgi_param HTTP_X_FORWARDED_PROTO https;
               }
-
               location ~ /\.ht { deny all; }
           }
           NGINX
@@ -271,20 +229,19 @@ jobs:
                       /etc/nginx/sites-enabled/pterodactyl
           sudo rm -f /etc/nginx/sites-enabled/default
           sudo nginx -t && sudo systemctl restart nginx
-          echo "✅ Nginx running on port 80"
+          echo "✅ Nginx ready"
 
-      # ── 10. Cloudflare Tunnel (expose ke internet) ────────────────────────
+      # ── 12. Cloudflare Tunnel ─────────────────────────────────────────────
       - name: 🌍 Start Cloudflare Tunnel
         run: |
           curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
             -o /usr/local/bin/cloudflared
           chmod +x /usr/local/bin/cloudflared
 
-          # Start tunnel background
           cloudflared tunnel --url http://localhost:80 --no-autoupdate \
             2>/tmp/cloudflared.log &
 
-          echo "⏳ Waiting for tunnel URL (up to 60s)..."
+          echo "⏳ Waiting for tunnel URL..."
           for i in $(seq 1 30); do
             TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9\-]+\.trycloudflare\.com' \
               /tmp/cloudflared.log 2>/dev/null | head -1)
@@ -293,59 +250,43 @@ jobs:
           done
 
           if [ -z "$TUNNEL_URL" ]; then
-            echo "⚠️ Retrying with longer wait..."
             sleep 15
             TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9\-]+\.trycloudflare\.com' \
               /tmp/cloudflared.log 2>/dev/null | head -1)
           fi
-
-          if [ -z "$TUNNEL_URL" ]; then
-            echo "❌ Could not get tunnel URL. Cloudflared log:"
-            cat /tmp/cloudflared.log
-            exit 1
-          fi
+          [ -z "$TUNNEL_URL" ] && cat /tmp/cloudflared.log && exit 1
 
           echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
-          echo ""
-          echo "════════════════════════════════════════════"
-          echo "  🌐 PANEL URL : $TUNNEL_URL"
-          echo "  👤 USERNAME  : ${{ secrets.ADMIN_USER || 'admin' }}"
-          echo "  🔑 PASSWORD  : (lihat secret ADMIN_PASS)"
-          echo "════════════════════════════════════════════"
 
-          # ── Update APP_URL ke tunnel URL agar CSRF/session cocok ────────────
-          echo "🔧 Updating APP_URL to $TUNNEL_URL..."
+          # Update APP_URL
           sudo sed -i "s|APP_URL=.*|APP_URL=$TUNNEL_URL|" /var/www/pterodactyl/.env
-
-          # Rebuild config cache dengan APP_URL yang sudah benar
-          # (route:cache TIDAK dipakai — Pterodactyl tidak support route caching)
           cd /var/www/pterodactyl
           sudo php artisan config:cache
           sudo php artisan view:cache
-
-          # Pastikan permissions storage OK untuk session file driver
           sudo chown -R www-data:www-data storage bootstrap/cache
           sudo chmod -R 775 storage bootstrap/cache
-
-          # Restart PHP-FPM agar config baru terbaca
           sudo systemctl restart php8.2-fpm
-          echo "✅ APP_URL=$TUNNEL_URL — config cached & services restarted"
 
-          # Tulis ke file untuk artifact
           mkdir -p /tmp/panel-url
           {
             echo "PANEL_URL=$TUNNEL_URL"
             echo "BYPASS_URL=$TUNNEL_URL/go-admin"
             echo "USERNAME=${{ secrets.ADMIN_USER || 'admin' }}"
             echo "RUN_ID=${{ github.run_id }}"
-            echo "RUN_NUMBER=${{ github.run_number }}"
             echo "STARTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
             echo "EXPIRES_AT=$(date -u -d '+5 hours 45 minutes' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u '+%Y-%m-%dT%H:%M:%SZ')"
           } > /tmp/panel-url/access.txt
-          cat /tmp/panel-url/access.txt
 
-      # ── 11. Upload URL sebagai artifact (bisa dibaca saat job masih running) ─
-      - name: 📤 Upload Panel URL Artifact
+          echo ""
+          echo "════════════════════════════════════════════"
+          echo "  🌐 PANEL URL  : $TUNNEL_URL"
+          echo "  🔓 BYPASS     : $TUNNEL_URL/go-admin"
+          echo "  👤 USERNAME   : ${{ secrets.ADMIN_USER || 'admin' }}"
+          echo "  🟢 Node.js Egg: sudah diimport otomatis"
+          echo "════════════════════════════════════════════"
+
+      # ── 13. Upload artifact ───────────────────────────────────────────────
+      - name: 📤 Upload Panel URL
         uses: actions/upload-artifact@v4
         with:
           name: panel-access-info
@@ -353,23 +294,24 @@ jobs:
           retention-days: 1
           overwrite: true
 
-      # ── 12. Print akses info ke summary ──────────────────────────────────
-      - name: 📋 Access Information
+      # ── 14. Summary ───────────────────────────────────────────────────────
+      - name: 📋 Access Info
         run: |
           echo "## 🦕 Pterodactyl Panel — LIVE ✅" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Info | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| 🌐 **Panel URL** | [$TUNNEL_URL]($TUNNEL_URL) |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔓 **Bypass Login (tanpa password)** | [$TUNNEL_URL/go-admin]($TUNNEL_URL/go-admin) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔓 **Login tanpa password** | [$TUNNEL_URL/go-admin]($TUNNEL_URL/go-admin) |" >> $GITHUB_STEP_SUMMARY
           echo "| 👤 Username | \`${{ secrets.ADMIN_USER || 'admin' }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| 🔑 Password | *(secret ADMIN_PASS)* |" >> $GITHUB_STEP_SUMMARY
-          echo "| ⏰ Aktif hingga | ~5 jam 45 menit dari sekarang |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🟢 Node.js Egg | ✅ Auto-imported (nodejs_22/20/18/16) |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⏰ Aktif hingga | ~5 jam 45 menit |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> **Akses cepat:** buka link Bypass Login untuk langsung masuk admin panel tanpa perlu username/password." >> $GITHUB_STEP_SUMMARY
-          echo "> URL berubah setiap restart — selalu cek Summary untuk URL terbaru." >> $GITHUB_STEP_SUMMARY
+          echo "> **Akses cepat:** klik link *Login tanpa password* untuk langsung masuk tanpa perlu username/password." >> $GITHUB_STEP_SUMMARY
+          echo "> URL berubah setiap restart. Selalu cek tab **Summary** untuk URL terbaru." >> $GITHUB_STEP_SUMMARY
 
-      # ── 13. Keep alive: panel jalan selama sisa waktu ─────────────────────
+      # ── 15. Keep alive ────────────────────────────────────────────────────
       - name: ♾️ Keep Panel Running (~5h 45m)
         run: |
           echo "✅ Panel live: $TUNNEL_URL"
@@ -382,14 +324,15 @@ jobs:
               http://localhost/auth/login --max-time 5 || echo "000")
             echo "[$COUNT] Heartbeat — HTTP $STATUS — $TUNNEL_URL"
           done
-          echo "⏰ Session ending — saving state..."
+          echo "⏰ Session ending..."
 
-      # ── 14. Simpan state DB sebelum workflow berakhir ─────────────────────
+      # ── 16. Save state ────────────────────────────────────────────────────
       - name: 💾 Save Panel State
         if: always()
         run: |
           mkdir -p /tmp/panel-state
-          sudo mysqldump -u root panel 2>/dev/null | gzip > /tmp/panel-state/db.sql.gz \
+          sudo mysqldump -u root panel 2>/dev/null \
+            | gzip > /tmp/panel-state/db.sql.gz \
             && echo "✅ DB saved ($(du -sh /tmp/panel-state/db.sql.gz | cut -f1))" \
             || echo "⚠️ DB dump failed"
           sudo cp /var/www/pterodactyl/.env /tmp/panel-state/.env 2>/dev/null || true
