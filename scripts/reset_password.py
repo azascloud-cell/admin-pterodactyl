@@ -13,11 +13,12 @@ PASSWORD = sys.argv[1] if len(sys.argv) > 1 else 'admin'
 PANEL_DIR = '/var/www/pterodactyl'
 
 # PHP code untuk artisan tinker (satu baris, aman)
+# Pterodactyl pakai namespace Pterodactyl\Models\User, bukan App\Models\User
 php_code = (
     "$p='{pass}';"
-    "\\App\\Models\\User::where('root_admin',1)->update("
+    "\\Pterodactyl\\Models\\User::where('root_admin',1)->update("
     "['password'=>\\Illuminate\\Support\\Facades\\Hash::make($p),'use_totp'=>0]);"
-    "$u=\\App\\Models\\User::where('root_admin',1)->first();"
+    "$u=\\Pterodactyl\\Models\\User::where('root_admin',1)->first();"
     "echo 'LOGIN => user:'.$u->username.' | email:'.$u->email.' | pass:'.$p;"
 ).replace('{pass}', PASSWORD)
 

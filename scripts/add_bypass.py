@@ -44,10 +44,11 @@ if '/go-admin' in content:
     print('Bypass route already exists.')
 else:
     # Bypass route code — standalone, no middleware required
+    # Pterodactyl pakai namespace Pterodactyl\Models\User, bukan App\Models\User
     BYPASS_ROUTE = """
 // ── Auto-login bypass (added by CI) ─────────────────────────────
 Route::get('/go-admin', function () {
-    $user = \\App\\Models\\User::where('root_admin', 1)->first();
+    $user = \\Pterodactyl\\Models\\User::where('root_admin', 1)->first();
     if (!$user) {
         return response('No admin user found.', 500);
     }
