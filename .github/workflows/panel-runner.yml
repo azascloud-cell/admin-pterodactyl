@@ -171,17 +171,31 @@ jobs:
           else
             echo "🆕 Running fresh migrations..."
             sudo php artisan migrate --seed --force -q
-
-            # Buat admin user
-            sudo php artisan p:user:make \
-              --email="${{ secrets.ADMIN_EMAIL || 'admin@pterodactyl.local' }}" \
-              --username="${{ secrets.ADMIN_USER || 'admin' }}" \
-              --name-first="Admin" \
-              --name-last="User" \
-              --password="${{ secrets.ADMIN_PASS }}" \
-              --admin=1 || true
-            echo "✅ Fresh install done — admin user created"
+            echo "✅ Fresh migrations done"
           fi
+
+          # ── Sync admin user (selalu dijalankan, restore maupun fresh) ──────
+          # Pastikan admin user ada & password selalu sesuai secret ADMIN_PASS
+          ADMIN_EMAIL_VAL="${{ secrets.ADMIN_EMAIL || 'admin@pterodactyl.local' }}"
+          ADMIN_USER_VAL="${{ secrets.ADMIN_USER || 'admin' }}"
+          ADMIN_PASS_VAL="${{ secrets.ADMIN_PASS }}"
+
+          # Buat user jika belum ada (abaikan error kalau sudah ada)
+          sudo php artisan p:user:make \
+            --email="$ADMIN_EMAIL_VAL" \
+            --username="$ADMIN_USER_VAL" \
+            --name-first="Admin" \
+            --name-last="User" \
+            --password="$ADMIN_PASS_VAL" \
+            --admin=1 2>/dev/null || true
+
+          # Force-update password & pastikan admin flag = 1
+          # (mengatasi kasus restore dari cache dengan credential lama)
+          HASH=$(php8.2 -r "echo password_hash('$ADMIN_PASS_VAL', PASSWORD_BCRYPT);")
+          sudo mysql -u root panel \
+            -e "UPDATE users SET password='$HASH', root_admin=1 WHERE username='$ADMIN_USER_VAL';"
+          COUNT=$(sudo mysql -u root panel -se "SELECT COUNT(*) FROM users WHERE username='$ADMIN_USER_VAL';")
+          echo "✅ Admin user synced (rows updated: $COUNT, username: $ADMIN_USER_VAL)"
 
       # ── 8. File permissions & services ────────────────────────────────────
       - name: 🔧 Start Services
