@@ -1,0 +1,1 @@
+# PteroShop Bot package
