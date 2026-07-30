@@ -376,6 +376,59 @@ jobs:
           sudo php artisan cache:clear -q 2>/dev/null || true
           echo "✅ Panel cache cleared"
 
+        # ── 18a. Pre-pull Docker Image ───────────────────────────────────────
+        - name: 🐳 Pre-pull Docker Image
+          run: |
+            echo "📦 Pulling ghcr.io/pterodactyl/yolks:nodejs_22 ..."
+            docker pull ghcr.io/pterodactyl/yolks:nodejs_22 \
+              && echo "✅ Docker image ready" \
+              || echo "⚠️ Pull failed — Wings akan pull saat server pertama kali start"
+
+        # ── 18b. Restart Wings — sync server baru ────────────────────────────
+        - name: 🔄 Restart Wings — Sync Server Config
+          run: |
+            echo "🔄 Restart Wings agar server baru terdaftar..."
+            # Kill Wings lama
+            OLD_PID=$(cat /tmp/wings.pid 2>/dev/null || echo "")
+            if [ -n "$OLD_PID" ]; then
+              sudo kill "$OLD_PID" 2>/dev/null || true
+              echo "  Killed old Wings PID=$OLD_PID"
+            fi
+            sleep 3
+
+            # Start Wings baru
+            nohup sudo wings --config /etc/pterodactyl/config.yml \
+              >> /var/log/pterodactyl/wings.log 2>&1 &
+            echo $! > /tmp/wings.pid
+
+            echo "⏳ Menunggu Wings kembali aktif..."
+            for i in $(seq 1 30); do
+              CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
+                http://127.0.0.1:8080 2>/dev/null || echo "000")
+              if [ "$CODE" != "000" ]; then
+                echo "✅ Wings aktif (HTTP $CODE) setelah $i attempt"
+                break
+              fi
+              sleep 2
+            done
+
+            # Beri waktu Wings untuk sync server list dari panel
+            sleep 8
+            echo "--- Wings log (last 15 lines) ---"
+            tail -15 /var/log/pterodactyl/wings.log || true
+
+        # ── 18c. Auto-Start Server ────────────────────────────────────────────
+        - name: ▶️ Auto-Start Node.js Server
+          run: |
+            python3 "$GITHUB_WORKSPACE/scripts/start_server.py"
+            # Tunggu beberapa saat untuk boot
+            sleep 20
+            echo "--- Docker containers ---"
+            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || true
+            echo "--- Wings log (last 10 lines) ---"
+            tail -10 /var/log/pterodactyl/wings.log || true
+
+    
       # ── 19. Upload artifact ───────────────────────────────────────────────
       - name: 📤 Upload Panel URL
         uses: actions/upload-artifact@v4
