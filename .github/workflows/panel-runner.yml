@@ -291,7 +291,7 @@ jobs:
           curl -fsSL https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_amd64 \
             -o /usr/local/bin/wings
           chmod +x /usr/local/bin/wings
-          wings --version
+          wings version
           echo "✅ Wings binary installed"
 
       # ── 14. Setup Wings node & config ────────────────────────────────────
