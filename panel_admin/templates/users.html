@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Pelanggan — PteroShop Admin{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <h5 class="mb-0 fw-bold">Pelanggan</h5>
+    <small style="color:var(--muted)">{{ users|length }} user terdaftar</small>
+  </div>
+</div>
+
+<div class="card-custom">
+  <div class="table-responsive">
+    <table class="table table-dark table-hover mb-0" style="font-size:.88rem">
+      <thead>
+        <tr style="color:var(--muted)">
+          <th>Telegram ID</th><th>Username</th><th>Ptero User</th><th>Ptero Email</th><th>Total Order</th><th>Total Belanja</th><th>Bergabung</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td style="color:var(--muted)">{{ u.telegram_id }}</td>
+          <td>{% if u.username %}<span style="color:var(--accent)">@{{ u.username }}</span>{% else %}—{% endif %}</td>
+          <td><small>{{ u.ptero_user or "—" }}</small></td>
+          <td><small style="color:var(--muted)">{{ u.ptero_email or "—" }}</small></td>
+          <td><span class="badge bg-secondary">{{ u.total_orders }}</span></td>
+          <td style="color:var(--teal)">
+            {% if u.total_spent %}Rp {{ "{:,}".format(u.total_spent).replace(",",".") }}{% else %}—{% endif %}
+          </td>
+          <td style="color:var(--muted)">{{ u.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-center py-4" style="color:var(--muted)">Belum ada pelanggan</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

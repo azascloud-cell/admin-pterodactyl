@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Konfigurasi — PteroShop Admin{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <h5 class="mb-0 fw-bold">Konfigurasi Bot</h5>
+    <small style="color:var(--muted)">Nilai disimpan ke database — restart bot setelah simpan</small>
+  </div>
+</div>
+
+<div class="card-custom p-4" style="max-width:680px">
+  <form method="POST">
+    {% for key, label, typ in config_keys %}
+    <div class="mb-3">
+      <label class="form-label" style="color:var(--muted);font-size:.85rem">{{ label }}</label>
+      {% if typ == 'password' %}
+      <div class="input-group">
+        <input type="password" name="{{ key }}" id="{{ key }}" class="form-control"
+               value="{{ config.get(key, '') }}" placeholder="(tidak berubah jika kosong)" autocomplete="off">
+        <button type="button" class="btn btn-outline-secondary" onclick="toggleVis('{{ key }}')">👁</button>
+      </div>
+      {% elif typ == 'number' %}
+      <input type="number" name="{{ key }}" class="form-control"
+             value="{{ config.get(key, '') }}" placeholder="{{ key }}">
+      {% else %}
+      <input type="text" name="{{ key }}" class="form-control"
+             value="{{ config.get(key, '') }}" placeholder="{{ key }}">
+      {% endif %}
+    </div>
+    {% endfor %}
+
+    <div class="alert" style="background:rgba(247,183,49,.1);border:1px solid rgba(247,183,49,.3);color:#f7b731;font-size:.85rem">
+      ⚠️ Setelah menyimpan konfigurasi, <strong>restart service bot</strong> agar perubahan berlaku:<br>
+      <code style="color:#f7b731">sudo systemctl restart pteroshop-bot</code>
+    </div>
+
+    <button type="submit" class="btn btn-accent">💾 Simpan Konfigurasi</button>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleVis(id) {
+  const el = document.getElementById(id);
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+</script>
+{% endblock %}

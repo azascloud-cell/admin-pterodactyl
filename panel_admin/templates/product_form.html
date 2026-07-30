@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}{{ action }} Produk — PteroShop Admin{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <h5 class="mb-0 fw-bold">{{ action }} Produk</h5>
+    <small style="color:var(--muted)">Isi 0 untuk nilai "Unlimited"</small>
+  </div>
+</div>
+
+<div class="card-custom p-4" style="max-width:520px">
+  <form method="POST">
+    <div class="mb-3">
+      <label class="form-label" style="color:var(--muted)">Nama Paket</label>
+      <input type="text" name="name" class="form-control" value="{{ product.name if product else '' }}" required placeholder="Paket 1">
+    </div>
+    <div class="row g-3 mb-3">
+      <div class="col">
+        <label class="form-label" style="color:var(--muted)">RAM (MB)</label>
+        <input type="number" name="ram" class="form-control" value="{{ product.ram if product else 1024 }}" min="0" placeholder="1024">
+        <small style="color:var(--muted)">0 = Unlimited</small>
+      </div>
+      <div class="col">
+        <label class="form-label" style="color:var(--muted)">CPU (%)</label>
+        <input type="number" name="cpu" class="form-control" value="{{ product.cpu if product else 30 }}" min="0" placeholder="30">
+      </div>
+    </div>
+    <div class="row g-3 mb-3">
+      <div class="col">
+        <label class="form-label" style="color:var(--muted)">Disk (MB)</label>
+        <input type="number" name="disk" class="form-control" value="{{ product.disk if product else 5120 }}" min="0" placeholder="5120">
+        <small style="color:var(--muted)">5120 = 5GB</small>
+      </div>
+      <div class="col">
+        <label class="form-label" style="color:var(--muted)">Harga (Rp)</label>
+        <input type="number" name="price" class="form-control" value="{{ product.price if product else 3500 }}" min="0" required placeholder="3500">
+      </div>
+    </div>
+    <div class="row g-3 mb-4">
+      <div class="col">
+        <label class="form-label" style="color:var(--muted)">Urutan tampil</label>
+        <input type="number" name="sort_order" class="form-control" value="{{ product.sort_order if product else 0 }}" min="0">
+      </div>
+      <div class="col d-flex align-items-end">
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" name="active" id="active"
+            {% if not product or product.active %}checked{% endif %}>
+          <label class="form-check-label" for="active" style="color:var(--text)">Aktif (dijual)</label>
+        </div>
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <button type="submit" class="btn btn-accent">Simpan</button>
+      <a href="{{ url_for('products') }}" class="btn btn-outline-secondary">Batal</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

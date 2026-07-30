@@ -1,18 +1,20 @@
 """
 PteroShop Bot — Entry Point
 Telegram bot jualan hosting Pterodactyl dengan pembayaran via Pakasir.
+Juga menjalankan Panel Admin Web (Flask) di port 8080.
 """
 import asyncio, logging, os
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters,
 )
-from bot.config import TELEGRAM_BOT_TOKEN, BOT_OWNER_ID, PAKASIR_CALLBACK_URL
+from bot.config import TELEGRAM_BOT_TOKEN, BOT_OWNER_ID, PAKASIR_CALLBACK_URL, ADMIN_PANEL_PORT
 from bot import database as db
 from bot.handlers import start, buy, server, admin
 from bot.handlers.buy import process_paid_order
 from bot import webhook as wh
 from bot import scheduler as sched
+from panel_admin.app import run_panel
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -24,9 +26,7 @@ log = logging.getLogger(__name__)
 async def on_paid(order: dict):
     """Dipanggil saat pembayaran dikonfirmasi (dari webhook atau polling)."""
     log.info("Processing paid order #%s for user %s", order["id"], order["telegram_id"])
-    # Gunakan aplikasi bot global
     app = _app
-    # Kirim "sedang diproses"
     try:
         await app.bot.send_message(
             order["telegram_id"],
@@ -76,7 +76,11 @@ async def main():
 
     # Init DB
     db.init_db()
-    log.info("Database initialized")
+    log.info("Database initialized (MySQL)")
+
+    # Jalankan Panel Admin Web di background (port 8080)
+    run_panel(ADMIN_PANEL_PORT)
+    log.info("Panel Admin Web running on port %d", ADMIN_PANEL_PORT)
 
     # Bangun aplikasi bot
     _app = build_app()
@@ -91,8 +95,7 @@ async def main():
     if PAKASIR_CALLBACK_URL:
         log.info("Pakasir callback URL: %s", PAKASIR_CALLBACK_URL)
     else:
-        log.warning("PAKASIR_CALLBACK_URL kosong — webhook dari Pakasir tidak akan diterima. "
-                    "Set REPLIT_DEV_DOMAIN atau gunakan domain publik.")
+        log.warning("PAKASIR_CALLBACK_URL kosong — webhook dari Pakasir tidak akan diterima.")
 
     # Jalankan scheduler di background
     asyncio.create_task(sched.run_scheduler())
@@ -105,6 +108,7 @@ async def main():
         try:
             await _app.bot.send_message(BOT_OWNER_ID,
                 f"🚀 *PteroShop Bot Online!*\n@{me.username}\n"
+                f"📊 Panel Admin: port `{ADMIN_PANEL_PORT}`\n"
                 f"Callback: `{PAKASIR_CALLBACK_URL or 'tidak dikonfigurasi'}`",
                 parse_mode="Markdown")
         except Exception:

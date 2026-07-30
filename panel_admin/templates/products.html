@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Produk — PteroShop Admin{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <h5 class="mb-0 fw-bold">Produk / Paket</h5>
+    <small style="color:var(--muted)">Kelola paket hosting yang dijual bot</small>
+  </div>
+  <div class="d-flex gap-2">
+    {% if not products %}
+    <form method="POST" action="{{ url_for('products_seed') }}">
+      <button class="btn btn-outline-secondary btn-sm">📦 Isi Paket Default</button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('product_add') }}" class="btn btn-accent btn-sm"><i class="bi bi-plus-lg me-1"></i>Tambah Paket</a>
+  </div>
+</div>
+
+<div class="card-custom">
+  <div class="table-responsive">
+    <table class="table table-dark table-hover mb-0" style="font-size:.88rem">
+      <thead>
+        <tr style="color:var(--muted)">
+          <th>ID</th><th>Nama</th><th>RAM</th><th>CPU</th><th>Disk</th><th>Harga/30hr</th><th>Urutan</th><th>Aktif</th><th>Aksi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in products %}
+        <tr>
+          <td>{{ p.id }}</td>
+          <td><strong>{{ p.name }}</strong></td>
+          <td>{% if p.ram %}{{ p.ram // 1024 }}GB{% else %}<span style="color:var(--teal)">∞</span>{% endif %}</td>
+          <td>{% if p.cpu %}{{ p.cpu }}%{% else %}<span style="color:var(--teal)">∞</span>{% endif %}</td>
+          <td>{% if p.disk %}{{ p.disk // 1024 }}GB{% else %}<span style="color:var(--teal)">∞</span>{% endif %}</td>
+          <td style="color:var(--teal)">Rp {{ "{:,}".format(p.price).replace(",",".") }}</td>
+          <td>{{ p.sort_order }}</td>
+          <td>
+            {% if p.active %}<span class="badge badge-paid">Aktif</span>
+            {% else %}<span class="badge badge-expired">Nonaktif</span>{% endif %}
+          </td>
+          <td>
+            <a href="{{ url_for('product_edit', pid=p.id) }}" class="btn btn-sm btn-outline-secondary me-1">✏️</a>
+            <form method="POST" action="{{ url_for('product_delete', pid=p.id) }}" class="d-inline" onsubmit="return confirm('Hapus {{ p.name }}?')">
+              <button class="btn btn-sm btn-outline-danger">🗑</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-center py-4" style="color:var(--muted)">
+          Belum ada produk. Klik "Isi Paket Default" untuk memulai.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
