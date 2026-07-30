@@ -174,47 +174,69 @@ jobs:
             echo "✅ Fresh migrations done"
           fi
 
-          # ── Sync admin user via Laravel bootstrap (bypass artisan validation) ─
-          # p:user:make menolak password < 8 karakter secara diam-diam.
-          # Script ini bootstrap Laravel langsung, pakai Hash::make() yang
-          # identik dengan apa yang Pterodactyl gunakan saat verify login.
-          sudo tee /tmp/sync_admin.php > /dev/null << 'PHPEOF'
-          <?php
-          require '/var/www/pterodactyl/vendor/autoload.php';
-          $app = require_once '/var/www/pterodactyl/bootstrap/app.php';
-          $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+          # ── Sync admin user via Python subprocess (no shell $ expansion) ──────
+          # Masalah sebelumnya: bcrypt hash mengandung $ yang bocor di shell.
+          # Solusi: Python subprocess.run() pass argumen sebagai list —
+          # tidak ada shell expansion sama sekali.
+          python3 << 'PYEOF'
+import subprocess, sys
 
-          use Pterodactyl\Models\User;
-          use Illuminate\Support\Facades\Hash;
-          use Ramsey\Uuid\Uuid;
+# 1. Generate bcrypt hash via PHP (captured as plain string)
+r = subprocess.run(
+    ['php8.2', '-r', "echo password_hash('admin', PASSWORD_BCRYPT);"],
+    capture_output=True, text=True)
+h = r.stdout.strip()
+if not h.startswith('$2'):
+    print('ERROR: hash generation failed:', r.stderr)
+    sys.exit(1)
+print(f'Hash generated: {h[:10]}...')
 
-          $user = User::where('username', 'admin')
-              ->orWhere('username', 'Admin')
-              ->first();
+# 2. Cek users yang ada
+r2 = subprocess.run(
+    ['sudo', 'mysql', '-u', 'root', 'panel', '-e',
+     'SELECT id, username, email FROM users;'],
+    capture_output=True, text=True)
+print('Current users:\n' + (r2.stdout.strip() or '(none)'))
 
-          if ($user) {
-              $user->username  = 'admin';
-              $user->password  = Hash::make('admin');
-              $user->root_admin = true;
-              $user->save();
-              echo "✅ Updated user id={$user->id} username={$user->username}\n";
-          } else {
-              $user = User::create([
-                  'uuid'       => Uuid::uuid4()->toString(),
-                  'username'   => 'admin',
-                  'email'      => 'admin@pterodactyl.local',
-                  'name_first' => 'Admin',
-                  'name_last'  => 'User',
-                  'password'   => Hash::make('admin'),
-                  'root_admin' => true,
-                  'language'   => 'en',
-                  'use_totp'   => false,
-              ]);
-              echo "✅ Created user id={$user->id} username={$user->username}\n";
-          }
-          PHPEOF
+# 3. Update atau insert admin user
+# UPDATE dulu — kalau 0 rows, INSERT
+update_sql = (
+    "UPDATE users SET username='admin', password='{}', root_admin=1 "
+    "WHERE 1=1 LIMIT 1;".format(h)
+)
+r3 = subprocess.run(
+    ['sudo', 'mysql', '-u', 'root', 'panel', '-e', update_sql],
+    capture_output=True, text=True)
+print('UPDATE:', r3.returncode, r3.stderr.strip() or 'OK')
 
-          sudo php8.2 /tmp/sync_admin.php
+# Cek apakah ada user sekarang
+r4 = subprocess.run(
+    ['sudo', 'mysql', '-u', 'root', 'panel', '-se',
+     "SELECT COUNT(*) FROM users;"],
+    capture_output=True, text=True)
+count = int(r4.stdout.strip() or '0')
+
+if count == 0:
+    # Tidak ada user sama sekali — INSERT fresh
+    import uuid as uuidlib
+    new_uuid = str(uuidlib.uuid4())
+    insert_sql = (
+        "INSERT INTO users "
+        "(uuid, username, email, name_first, name_last, password, language, root_admin, use_totp, created_at, updated_at) "
+        "VALUES ('{}', 'admin', 'admin@pterodactyl.local', 'Admin', 'User', '{}', 'en', 1, 0, NOW(), NOW());".format(new_uuid, h)
+    )
+    r5 = subprocess.run(
+        ['sudo', 'mysql', '-u', 'root', 'panel', '-e', insert_sql],
+        capture_output=True, text=True)
+    print('INSERT:', r5.returncode, r5.stderr.strip() or 'OK')
+
+# 4. Verifikasi akhir
+r6 = subprocess.run(
+    ['sudo', 'mysql', '-u', 'root', 'panel', '-e',
+     "SELECT id, username, email, root_admin, LEFT(password,10) AS pwd FROM users;"],
+    capture_output=True, text=True)
+print('Final state:\n' + r6.stdout.strip())
+PYEOF
 
       # ── 8. File permissions & services ────────────────────────────────────
       - name: 🔧 Start Services
