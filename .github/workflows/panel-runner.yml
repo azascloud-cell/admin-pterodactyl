@@ -147,6 +147,11 @@ jobs:
           grep -q '^SESSION_SECURE_COOKIE=' .env \
             && sudo sed -i "s|SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=false|" .env \
             || echo "SESSION_SECURE_COOKIE=false" | sudo tee -a .env
+          # Disable reCAPTCHA — tidak ada kunci valid di environment ini,
+          # server-side validation akan gagal dan menyebabkan "unexpected error" saat login
+          grep -q '^RECAPTCHA_ENABLED=' .env \
+            && sudo sed -i "s|RECAPTCHA_ENABLED=.*|RECAPTCHA_ENABLED=false|" .env \
+            || echo "RECAPTCHA_ENABLED=false" | sudo tee -a .env
           echo "✅ .env configured"
 
       # ── 7. Database: restore atau migrate ────────────────────────────────
