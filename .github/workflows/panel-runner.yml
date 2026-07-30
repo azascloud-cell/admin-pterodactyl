@@ -351,14 +351,14 @@ jobs:
           sudo chmod 777 "$VOL_DIR"
 
           # Buat index.js placeholder agar server bisa langsung start
-          sudo tee "$VOL_DIR/index.js" > /dev/null <<'JS'
-const http = require('http');
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, {'Content-Type': 'text/plain'});
-  res.end('Hello from Pterodactyl Node.js Server!\n');
-}).listen(PORT, () => console.log(`Listening on port ${PORT}`));
-JS
+            {
+              echo "const http = require('http');"
+              echo "const PORT = process.env.PORT || 3000;"
+              echo "http.createServer((req, res) => {"
+              echo "  res.writeHead(200, {'Content-Type': 'text/plain'});"
+              printf "  res.end('Hello from Pterodactyl Node.js Server!\\n');\n"
+              printf '}).listen(PORT, () => console.log(`Listening on port ${PORT}`));\n'
+            } | sudo tee "$VOL_DIR/index.js" > /dev/null
           echo "✅ index.js placeholder dibuat di $VOL_DIR"
 
           # Force-set server ke status installed via DB
