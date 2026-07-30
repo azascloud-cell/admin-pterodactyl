@@ -332,7 +332,51 @@ jobs:
         run: |
           python3 "$GITHUB_WORKSPACE/scripts/create_server.py"
 
-      # ── 17. Upload artifact ───────────────────────────────────────────────
+      # ── 17. Finalize Server (skip install, mark installed) ────────────────
+      - name: ✅ Finalize Server — Mark Installed
+        run: |
+          # Ambil UUID server dari DB
+          SRV_UUID=$(sudo mysql -u root panel -se \
+            "SELECT uuid FROM servers ORDER BY id DESC LIMIT 1;" 2>/dev/null)
+
+          if [ -z "$SRV_UUID" ]; then
+            echo "⚠ No server found — skip finalize"
+            exit 0
+          fi
+          echo "Server UUID: $SRV_UUID"
+
+          # Buat volume directory agar Wings tidak perlu pull image install
+          VOL_DIR="/var/lib/pterodactyl/volumes/${SRV_UUID}"
+          sudo mkdir -p "$VOL_DIR"
+          sudo chmod 777 "$VOL_DIR"
+
+          # Buat index.js placeholder agar server bisa langsung start
+          sudo tee "$VOL_DIR/index.js" > /dev/null <<'JS'
+const http = require('http');
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, {'Content-Type': 'text/plain'});
+  res.end('Hello from Pterodactyl Node.js Server!\n');
+}).listen(PORT, () => console.log(`Listening on port ${PORT}`));
+JS
+          echo "✅ index.js placeholder dibuat di $VOL_DIR"
+
+          # Force-set server ke status installed via DB
+          # Pterodactyl v1.x: status=NULL artinya installed, installed=1
+          sudo mysql -u root panel -e \
+            "UPDATE servers SET status=NULL, installed=1, skip_scripts=1 WHERE uuid='${SRV_UUID}';" \
+            2>/dev/null || \
+          sudo mysql -u root panel -e \
+            "UPDATE servers SET installed=1, skip_scripts=1 WHERE uuid='${SRV_UUID}';"
+
+          echo "✅ Server marked as installed (status=NULL)"
+
+          # Clear panel cache agar status ter-refresh
+          cd /var/www/pterodactyl
+          sudo php artisan cache:clear -q 2>/dev/null || true
+          echo "✅ Panel cache cleared"
+
+      # ── 19. Upload artifact ───────────────────────────────────────────────
       - name: 📤 Upload Panel URL
         uses: actions/upload-artifact@v4
         with:

@@ -54,6 +54,8 @@ C_DB_LIM      = col(srv_cols, 'database_limit',   'databaseLimit') if (
     'database_limit' in srv_cols or 'databaseLimit' in srv_cols) else None
 C_BACKUP_LIM  = col(srv_cols, 'backup_limit',     'backupLimit') if (
     'backup_limit' in srv_cols or 'backupLimit' in srv_cols) else None
+# Cek apakah ada kolom 'status' terpisah dari 'installed'
+HAS_STATUS_COL = 'status' in srv_cols and 'installed' in srv_cols
 
 print(f'  ✓ uuid_short col  : {C_UUID_SHORT}')
 print(f'  ✓ skip_scripts col: {C_SKIP}')
@@ -123,7 +125,7 @@ insert_cols = [
 insert_vals = [
     f"'{srv_uuid}'", f"'{srv_uuid_short}'", node_id,
     f"'{q('My Node.js App')}'", f"'{q('Auto-created by GitHub Actions CI')}'",
-    '0', owner_id,
+    '1', owner_id,              # skip_scripts=1 → langsung skip install container
     '512', '0', '1024', '500', '100', 'NULL', '0',
     alloc_id, nest_id, egg_id,
     f"'{q(startup)}'", f"'{docker_image}'", installed_val,
@@ -136,10 +138,15 @@ for lim_col, lim_val in [(C_ALLOC_LIM, '0'), (C_DB_LIM, '0'), (C_BACKUP_LIM, '0'
         insert_cols.append(f'`{lim_col}`')
         insert_vals.append(lim_val)
 
-# Jika installed col == status (string enum di versi baru), set ke 'installed'
+# Jika installed col == status (enum), set NULL = installed (bukan 'installing')
 if C_INSTALLED == 'status':
     idx = insert_cols.index(f'`{C_INSTALLED}`')
-    insert_vals[idx] = "'installing'"
+    insert_vals[idx] = 'NULL'   # NULL = server installed di Pterodactyl v1.x
+
+# Jika ada KEDUA kolom installed + status, tambahkan status=NULL secara eksplisit
+if HAS_STATUS_COL:
+    insert_cols.append('`status`')
+    insert_vals.append('NULL')   # NULL = installed / no pending action
 
 sql = (
     f"INSERT INTO servers ({', '.join(insert_cols)}) "
