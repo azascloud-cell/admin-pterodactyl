@@ -285,7 +285,56 @@ jobs:
           echo "  🟢 Node.js Egg: sudah diimport otomatis"
           echo "════════════════════════════════════════════"
 
-      # ── 13. Upload artifact ───────────────────────────────────────────────
+      # ── 13. Install Wings ─────────────────────────────────────────────────
+      - name: 🦅 Install Wings
+        run: |
+          curl -fsSL https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_amd64 \
+            -o /usr/local/bin/wings
+          chmod +x /usr/local/bin/wings
+          wings --version
+          echo "✅ Wings binary installed"
+
+      # ── 14. Setup Wings node & config ────────────────────────────────────
+      - name: ⚙️ Setup Wings Node & Config
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/setup_wings.py"
+
+      # ── 15. Start Wings ───────────────────────────────────────────────────
+      - name: 🚀 Start Wings Daemon
+        run: |
+          sudo mkdir -p /var/lib/pterodactyl/volumes
+          sudo mkdir -p /var/log/pterodactyl
+
+          # Start Wings sebagai background daemon
+          sudo nohup wings --config /etc/pterodactyl/config.yml \
+            > /var/log/pterodactyl/wings.log 2>&1 &
+          echo $! | sudo tee /var/run/wings.pid
+
+          echo "⏳ Waiting for Wings to start..."
+          for i in $(seq 1 30); do
+            if curl -sk http://127.0.0.1:8080 >/dev/null 2>&1; then
+              echo "✅ Wings is up (attempt $i)"
+              break
+            fi
+            # Wings mungkin return non-200 tapi sudah listen — coba dengan curl -o
+            CODE=$(curl -sk -o /dev/null -w "%{http_code}" http://127.0.0.1:8080 2>/dev/null || echo "000")
+            if [ "$CODE" != "000" ]; then
+              echo "✅ Wings responding (HTTP $CODE) — attempt $i"
+              break
+            fi
+            echo "  Attempt $i/30 — waiting 2s..."
+            sleep 2
+          done
+
+          echo "--- Wings log ---"
+          cat /var/log/pterodactyl/wings.log 2>/dev/null | tail -20 || true
+
+      # ── 16. Auto-create Node.js Server ───────────────────────────────────
+      - name: 🟢 Auto-Create Node.js Server
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/create_server.py"
+
+      # ── 17. Upload artifact ───────────────────────────────────────────────
       - name: 📤 Upload Panel URL
         uses: actions/upload-artifact@v4
         with:
@@ -294,7 +343,7 @@ jobs:
           retention-days: 1
           overwrite: true
 
-      # ── 14. Summary ───────────────────────────────────────────────────────
+      # ── 18. Summary ───────────────────────────────────────────────────────
       - name: 📋 Access Info
         run: |
           echo "## 🦕 Pterodactyl Panel — LIVE ✅" >> $GITHUB_STEP_SUMMARY
@@ -306,12 +355,14 @@ jobs:
           echo "| 👤 Username | \`${{ secrets.ADMIN_USER || 'admin' }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| 🔑 Password | *(secret ADMIN_PASS)* |" >> $GITHUB_STEP_SUMMARY
           echo "| 🟢 Node.js Egg | ✅ Auto-imported (nodejs_22/20/18/16) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🦅 Wings | ✅ Running (port 8080) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🖥️ Server | ✅ Node.js App auto-created (port $SERVER_PORT) |" >> $GITHUB_STEP_SUMMARY
           echo "| ⏰ Aktif hingga | ~5 jam 45 menit |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "> **Akses cepat:** klik link *Login tanpa password* untuk langsung masuk tanpa perlu username/password." >> $GITHUB_STEP_SUMMARY
           echo "> URL berubah setiap restart. Selalu cek tab **Summary** untuk URL terbaru." >> $GITHUB_STEP_SUMMARY
 
-      # ── 15. Keep alive ────────────────────────────────────────────────────
+      # ── 19. Keep alive ────────────────────────────────────────────────────
       - name: ♾️ Keep Panel Running (~5h 45m)
         run: |
           echo "✅ Panel live: $TUNNEL_URL"
@@ -326,7 +377,7 @@ jobs:
           done
           echo "⏰ Session ending..."
 
-      # ── 16. Save state ────────────────────────────────────────────────────
+      # ── 20. Save state ────────────────────────────────────────────────────
       - name: 💾 Save Panel State
         if: always()
         run: |
