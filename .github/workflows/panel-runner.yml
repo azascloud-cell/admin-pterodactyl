@@ -177,6 +177,14 @@ jobs:
           numprocs=2
           redirect_stderr=true
           stdout_logfile=/var/log/supervisor/ptero.log
+
+          [program:wings]
+          command=wings --config /etc/pterodactyl/config.yml
+          autostart=false
+          autorestart=true
+          user=root
+          redirect_stderr=true
+          stdout_logfile=/var/log/pterodactyl/wings.log
           CONF
 
           sudo supervisorctl reread && sudo supervisorctl update
@@ -304,14 +312,23 @@ jobs:
         run: |
           sudo mkdir -p /var/lib/pterodactyl/volumes
           sudo mkdir -p /var/log/pterodactyl
-          # Pre-create log file agar shell dapat redirect tanpa sudo
           sudo touch /var/log/pterodactyl/wings.log
           sudo chmod 666 /var/log/pterodactyl/wings.log
 
-          # Start Wings — redirect SETELAH file dibuat, sehingga tidak perlu sudo untuk redirect
-          nohup sudo wings --config /etc/pterodactyl/config.yml \
-            >> /var/log/pterodactyl/wings.log 2>&1 &
-          echo $! > /tmp/wings.pid
+          # Pastikan wings binary ada di PATH supervisor
+          sudo ln -sf /usr/local/bin/wings /usr/bin/wings 2>/dev/null || true
+
+          # Start Wings via supervisord (autorestart=true kalau crash)
+          sudo supervisorctl start wings 2>/dev/null || true
+          sleep 3
+
+          # Fallback: nohup kalau supervisor belum ready
+          if ! curl -sk --max-time 3 http://127.0.0.1:8080 >/dev/null 2>&1; then
+            echo "Supervisor belum ready, pakai nohup fallback..."
+            nohup sudo wings --config /etc/pterodactyl/config.yml \
+              >> /var/log/pterodactyl/wings.log 2>&1 &
+            echo $! > /tmp/wings.pid
+          fi
 
           echo "⏳ Waiting for Wings to start..."
           for i in $(seq 1 30); do
@@ -387,16 +404,18 @@ jobs:
       # ── 18b. Restart Wings — sync new server ─────────────────────────────────
       - name: 🔄 Restart Wings — Sync Server Config
         run: |
-          echo "🔄 Restart Wings agar server baru terdaftar..."
-          OLD_PID=$(cat /tmp/wings.pid 2>/dev/null || echo "")
-          if [ -n "$OLD_PID" ]; then
-            sudo kill "$OLD_PID" 2>/dev/null || true
-            echo "  Killed Wings PID=$OLD_PID"
-          fi
-          sleep 3
-          nohup sudo wings --config /etc/pterodactyl/config.yml \
-            >> /var/log/pterodactyl/wings.log 2>&1 &
-          echo $! > /tmp/wings.pid
+          echo "🔄 Restart Wings via supervisor agar server baru terdaftar..."
+          sudo supervisorctl restart wings 2>/dev/null || {
+            # Fallback: kill & restart manual
+            OLD_PID=$(cat /tmp/wings.pid 2>/dev/null || echo "")
+            [ -n "$OLD_PID" ] && { sudo kill "$OLD_PID" 2>/dev/null || true; echo "  Killed Wings PID=$OLD_PID"; }
+            sleep 3
+            nohup sudo wings --config /etc/pterodactyl/config.yml \
+              >> /var/log/pterodactyl/wings.log 2>&1 &
+            echo $! > /tmp/wings.pid
+            echo "  Fallback nohup used"
+          }
+
           echo "⏳ Menunggu Wings kembali aktif..."
           for i in $(seq 1 30); do
             CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
@@ -407,19 +426,40 @@ jobs:
             fi
             sleep 2
           done
-          sleep 8
-          echo "--- Wings log (last 15 lines) ---"
-          tail -15 /var/log/pterodactyl/wings.log || true
+
+          # Beri waktu Wings sync server list dari panel
+          echo "⏳ Tunggu Wings sync server list (15s)..."
+          sleep 15
+
+          echo "--- Wings log (last 20 lines) ---"
+          tail -20 /var/log/pterodactyl/wings.log || true
+
+          # ── Diagnostik: verifikasi Wings API ─────────────────────────────
+          echo "--- Wings API system check ---"
+          curl -sk http://127.0.0.1:8080/api/system 2>/dev/null \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print('Wings version:', d.get('version','?'), '| Docker:', d.get('docker',{}).get('version','?'))" \
+            2>/dev/null || echo "  Wings /api/system: tidak bisa decode JSON (normal jika perlu auth)"
+
+          # ── Diagnostik: cek server UUID di panel vs Wings ─────────────────
+          echo "--- Server di DB ---"
+          SRV_UUID=$(sudo mysql -u root panel -se \
+            "SELECT uuid FROM servers ORDER BY id DESC LIMIT 1;" 2>/dev/null)
+          echo "  Server UUID: $SRV_UUID"
+          echo "  Volume dir: $(ls /var/lib/pterodactyl/volumes/${SRV_UUID}/ 2>/dev/null || echo 'NOT FOUND')"
+
+          echo "--- Docker status ---"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "  docker ps failed"
+          docker images --format "table {{.Repository}}\t{{.Tag}}" 2>/dev/null | grep -E "yolks|pterodactyl|nodejs" || echo "  No pterodactyl images cached"
 
       # ── 18c. Auto-Start Server ────────────────────────────────────────────────
       - name: ▶️ Auto-Start Node.js Server
         run: |
           python3 "$GITHUB_WORKSPACE/scripts/start_server.py"
-          sleep 20
-          echo "--- Docker containers ---"
-          docker ps 2>/dev/null || true
-          echo "--- Wings log (last 10 lines) ---"
-          tail -10 /var/log/pterodactyl/wings.log || true
+          sleep 25
+          echo "--- Docker containers after start ---"
+          docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || true
+          echo "--- Wings log (last 15 lines) ---"
+          tail -15 /var/log/pterodactyl/wings.log || true
 
             # ── 19. Upload artifact ───────────────────────────────────────────────
       - name: 📤 Upload Panel URL
@@ -458,9 +498,22 @@ jobs:
           while [ $SECONDS -lt $END ]; do
             sleep 300
             COUNT=$((COUNT + 1))
+            # Heartbeat panel
             STATUS=$(curl -sk -o /dev/null -w "%{http_code}" \
               http://localhost/auth/login --max-time 5 || echo "000")
-            echo "[$COUNT] Heartbeat — HTTP $STATUS — $TUNNEL_URL"
+            # Heartbeat Wings — restart jika tidak merespons
+            WINGS_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
+              http://127.0.0.1:8080 --max-time 5 2>/dev/null || echo "000")
+            if [ "$WINGS_CODE" = "000" ]; then
+              echo "[$COUNT] ⚠️ Wings tidak merespons — restart via supervisor"
+              sudo supervisorctl restart wings 2>/dev/null || \
+                nohup sudo wings --config /etc/pterodactyl/config.yml \
+                  >> /var/log/pterodactyl/wings.log 2>&1 &
+              sleep 10
+              WINGS_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
+                http://127.0.0.1:8080 --max-time 5 2>/dev/null || echo "000")
+            fi
+            echo "[$COUNT] Heartbeat — Panel: $STATUS | Wings: $WINGS_CODE — $TUNNEL_URL"
           done
           echo "⏰ Session ending..."
 

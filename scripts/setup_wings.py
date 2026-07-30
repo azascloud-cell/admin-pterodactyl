@@ -6,7 +6,10 @@ Pterodactyl v1.x nodes table pakai CAMPURAN camelCase dan snake_case:
   camelCase  : daemonBase, daemonListen, daemonSFTP
   snake_case : daemon_token_id, daemon_token, behind_proxy, dll
 
-Script ini probing schema dulu sebelum INSERT agar tidak error kolom.
+PENTING: daemon_token harus disimpan sebagai PLAINTEXT (bukan bcrypt).
+Pterodactyl panel menggunakan raw daemon_token untuk sign JWT ke Wings.
+Wings memverifikasi JWT tersebut dengan token yang sama di config.yml.
+Wings→Panel auth menggunakan Bearer token_id.token_plaintext.
 """
 import subprocess, sys, uuid as uuidlib, os, secrets
 from datetime import datetime
@@ -30,16 +33,6 @@ def mysql_val(sql, db='panel'):
         ['sudo', 'mysql', '-u', 'root', db, '-se', sql],
         capture_output=True, text=True)
     return r.stdout.strip()
-
-def bcrypt(plaintext):
-    r = subprocess.run(
-        ['php8.2', '-r', f"echo password_hash('{plaintext}', PASSWORD_BCRYPT);"],
-        capture_output=True, text=True)
-    h = r.stdout.strip()
-    if not h.startswith('$2'):
-        print(f'  ❌ bcrypt failed: {r.stderr.strip()}')
-        sys.exit(1)
-    return h
 
 def q(s):
     return str(s).replace("'", "\\'")
@@ -80,18 +73,18 @@ print(f'  ✓ Location ID: {loc_id}')
 print('→ Checking node...')
 node_id = mysql_val("SELECT id FROM nodes WHERE name='GitHub Actions Runner' LIMIT 1;")
 
-# Generate token baru (kita selalu regenerate karena plaintext tidak disimpan di DB)
+# Generate token — simpan PLAINTEXT di DB agar panel bisa sign JWT ke Wings
+# Wings verifikasi JWT panel pakai token yang sama (plaintext)
 token_plaintext = secrets.token_hex(32)
 token_id_val    = secrets.token_hex(8)   # 16-char hex string
-token_hashed    = bcrypt(token_plaintext)
 
 if node_id:
-    print(f'  ✓ Node already exists (id={node_id}) — updating token')
+    print(f'  ✓ Node already exists (id={node_id}) — updating token (plaintext)')
     if HAS_TOKEN_ID:
         mysql(f"UPDATE nodes SET daemon_token_id='{token_id_val}', "
-              f"daemon_token='{q(token_hashed)}' WHERE id={node_id};")
+              f"daemon_token='{q(token_plaintext)}' WHERE id={node_id};")
     else:
-        mysql(f"UPDATE nodes SET daemon_token='{q(token_hashed)}' WHERE id={node_id};")
+        mysql(f"UPDATE nodes SET daemon_token='{q(token_plaintext)}' WHERE id={node_id};")
 else:
     node_uuid = str(uuidlib.uuid4())
     if HAS_TOKEN_ID:
@@ -106,7 +99,7 @@ else:
             f"'127.0.0.1', 'http', 0, "
             f"7168, 0, 102400, 0, 100, "
             f"'{WINGS_DATA_DIR}', 2022, 8080, "
-            f"'{token_id_val}', '{q(token_hashed)}', "
+            f"'{token_id_val}', '{q(token_plaintext)}', "
             f"0, '{NOW}', '{NOW}');"
         )
     else:
@@ -119,7 +112,7 @@ else:
             f"('{node_uuid}', 1, 'GitHub Actions Runner', {loc_id}, "
             f"'127.0.0.1', 'http', 0, "
             f"7168, 0, 102400, 0, 100, "
-            f"'{WINGS_DATA_DIR}', 2022, 8080, '{q(token_hashed)}', "
+            f"'{WINGS_DATA_DIR}', 2022, 8080, '{q(token_plaintext)}', "
             f"0, '{NOW}', '{NOW}');"
         )
     node_id = mysql_val("SELECT id FROM nodes WHERE name='GitHub Actions Runner' LIMIT 1;")
@@ -152,7 +145,7 @@ subprocess.run(['sudo', 'touch', '/var/log/pterodactyl/wings.log'], check=True)
 subprocess.run(['sudo', 'chmod', '666', '/var/log/pterodactyl/wings.log'], check=True)
 
 config = (
-    "debug: false\n"
+    "debug: true\n"
     "uuid: '{uuid}'\n"
     "token_id: '{token_id}'\n"
     "token: '{token}'\n"
@@ -181,7 +174,7 @@ with open(tmp_cfg, 'w') as f:
     f.write(config)
 subprocess.run(['sudo', 'cp', tmp_cfg, f'{WINGS_CONFIG_DIR}/config.yml'], check=True)
 subprocess.run(['sudo', 'chmod', '600', f'{WINGS_CONFIG_DIR}/config.yml'], check=True)
-print(f'  ✓ Config written: token_id={token_id_val}')
+print(f'  ✓ Config written: token_id={token_id_val}  token(plaintext, len={len(token_plaintext)})')
 
 # ── 6. Export ke GITHUB_ENV ───────────────────────────────────────────────────
 github_env = os.environ.get('GITHUB_ENV', '')
@@ -196,4 +189,5 @@ print(f'  ✅ Wings node ready!')
 print(f'     Node ID  : {node_id}')
 print(f'     UUID     : {node_uuid_db}')
 print(f'     token_id : {token_id_val}')
+print(f'     token    : (plaintext, {len(token_plaintext)} chars)')
 print('══════════════════════════════════════════')
