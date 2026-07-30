@@ -181,7 +181,8 @@ jobs:
           ADMIN_USER="${{ secrets.ADMIN_USER }}"
           ADMIN_PASS="${{ secrets.ADMIN_PASS }}"
           # Fallback ke 'admin' jika secret tidak di-set
-          python3 scripts/sync_admin.py "${ADMIN_USER:-admin}" "${ADMIN_PASS:-admin}"
+          # Gunakan path absolut ke repo checkout, bukan cwd /var/www/pterodactyl
+          python3 "$GITHUB_WORKSPACE/scripts/sync_admin.py" "${ADMIN_USER:-admin}" "${ADMIN_PASS:-admin}"
 
       # ── 8. File permissions & services ────────────────────────────────────
       - name: 🔧 Start Services
